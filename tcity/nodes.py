@@ -3,7 +3,7 @@ import math
 import bpy
 from .assets import PREFIX, ensure_assets, material
 
-GROUP_NAME = 'TCity • Taiwan District v0.4'
+GROUP_NAME = 'TCity • Taiwan District v0.5'
 
 
 class Graph:
@@ -32,10 +32,14 @@ class Graph:
         if isinstance(value,bpy.types.NodeSocket): self.tree.links.new(value,socket)
         else: socket.default_value = value
 
-    def math(self, op, a, b=0, label=''):
+    def math(self, op, a, b=0, label='', c=None):
         n = self.node('ShaderNodeMath',label or op.title(),operation=op)
         self.put(a,n.inputs[0]); self.put(b,n.inputs[1])
+        if c is not None: self.put(c,n.inputs[2])
         return n.outputs[0]
+
+    def equal(self, a, b, epsilon=.5):
+        return self.math('COMPARE',a,b,'Equal',c=epsilon)
 
     def vector(self, x=0,y=0,z=0):
         n = self.node('ShaderNodeCombineXYZ')
@@ -121,6 +125,10 @@ SOCKETS = [
     ('Max Floors','NodeSocketInt',5,2,7,'Maximum occupied storeys / 最高樓層'),
     ('Townhouse Mix','NodeSocketFloat',.15,0,1,'Share of alternate facade variants / 第二組住宅立面比例'),
     ('Boundary Setback','NodeSocketFloat',.2,0,10,'Extra clearance inside region boundary / 邊界退縮'),
+    ('Road Curves','NodeSocketObject',None,None,None,'選配的外部道路中心線曲線物件；留空則使用區域網格內畫的游離邊 / Optional external road centerline curve object; leave empty to draw free edges inside the region instead'),
+    ('Smooth Streets','NodeSocketBool',True,None,None,'將道路邊平滑成 Catmull-Rom 曲線；關閉維持折角路口 / Smooth drawn road edges into a Catmull-Rom curve'),
+    ('Road Resolution','NodeSocketFloat',1.,.25,5.,'道路中心線取樣間距，公尺 / Centerline resample spacing in metres'),
+    ('Bend Buildings to Curve','NodeSocketBool',True,None,None,'讓曲線街道的街屋沿曲率彎折（需要 Realize Instances，較耗記憶體） / Bend curved-street rowhouses along the curve (Realize Instances; more memory)'),
     ('Signs','NodeSocketBool',True,None,None,'Shop signage / 店家招牌'),
     ('Rooftops','NodeSocketBool',True,None,None,'Water tanks and sheet metal additions / 屋頂設施'),
     ('Street Life','NodeSocketBool',True,None,None,'Potted plants and street props / 街邊物件與盆栽'),
@@ -166,9 +174,14 @@ def ensure_group():
     sep=g.node('ShaderNodeSeparateXYZ');g.put(span,sep.inputs[0])
     origin=bbox.outputs['Min']
     nbr=g.node('GeometryNodeInputMeshEdgeNeighbors')
-    edge=g.math('LESS_THAN',nbr.outputs['Face Count'],2)
+    # Face Count == 1 is a true boundary edge; == 0 is a free edge drawn inside the
+    # region, reserved for road centerlines (decision 1 / docs/PLAN.md §4.1).
+    edge=g.equal(nbr.outputs['Face Count'],1)
     boundary=g.node('GeometryNodeSeparateGeometry',domain='EDGE')
     g.put(p['Geometry'],boundary.inputs['Geometry']);g.put(edge,boundary.inputs['Selection'])
+    road_edge_sel=g.equal(nbr.outputs['Face Count'],0)
+    road_edges=g.node('GeometryNodeSeparateGeometry','Road centerline edges',domain='EDGE')
+    g.put(p['Geometry'],road_edges.inputs['Geometry']);g.put(road_edge_sel,road_edges.inputs['Selection'])
     g.section('02 / PARCELS · streets, paired rows and back alleys',(1000,0))
     extra=g.math('MULTIPLY',p['Sidewalk Width'],2)
     px=g.math('ADD',g.math('ADD',g.math('MULTIPLY',p['Frontage'],p['Lots per Block']),p['Road Width']),extra)
@@ -249,9 +262,16 @@ def ensure_group():
         pieces.append(instance.outputs['Instances'])
     from .infrastructure import infrastructure
     streets=infrastructure(g,p,origin,px,py,nx,ny,boundary.outputs['Selection'],road_material)
-    join=g.node('GeometryNodeJoinGeometry','District layers')
-    for geom in pieces+streets:g.put(geom,join.inputs['Geometry'])
-    g.put(join.outputs[0],out.inputs[0])
+    grid_join=g.node('GeometryNodeJoinGeometry','Grid district layers')
+    for geom in pieces+streets:g.put(geom,grid_join.inputs['Geometry'])
+    g.section('08 / CURVED STREETS · dual branch (docs/PLAN.md 0.5.0)',(5100,1400))
+    from .roads import curve_district
+    curve_geo,has_curve=curve_district(g,p,cols,p['Geometry'],road_edges.outputs['Selection'],
+                                        boundary.outputs['Selection'],road_material)
+    branch=g.node('GeometryNodeSwitch','Grid or curved streets',input_type='GEOMETRY')
+    g.put(has_curve,branch.inputs['Switch'])
+    g.put(grid_join.outputs[0],branch.inputs['False']);g.put(curve_geo,branch.inputs['True'])
+    g.put(branch.outputs[0],out.inputs[0])
     tree.use_fake_user=True
     tree.asset_mark()
     tree.asset_data.description=tree.description

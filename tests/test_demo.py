@@ -5,7 +5,7 @@ ROOT=Path(__file__).resolve().parents[1]
 bpy.ops.wm.open_mainfile(filepath=str(ROOT/'dist/TCity_Taiwan_District.blend'))
 obj=next(o for o in bpy.context.scene.objects if o.name=='TCity • 台北住商混合街區')
 mod=obj.modifiers[0]
-assert mod.type=='NODES' and mod.node_group.name.endswith('v0.4')
+assert mod.type=='NODES' and mod.node_group.name.endswith('v0.5')
 assert len([o for o in bpy.context.scene.objects if o.type=='CAMERA'])==4
 hdr=next(im for im in bpy.data.images if 'urban_street_03' in im.name)
 assert hdr.packed_file and hdr.packed_file.size>6000000

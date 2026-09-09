@@ -2,7 +2,7 @@
 bl_info = {
     'name': 'TCity — Taiwan Districts',
     'author': 'TCity contributors',
-    'version': (0,4,0),
+    'version': (0,5,0),
     'blender': (5,2,0),
     'location': 'View3D > Sidebar > TCity',
     'description': 'Generate Taiwanese mixed-use streets from a filled planar region',
@@ -36,6 +36,24 @@ def validate_region(obj):
     usage=Counter(edge for face in mesh.polygons for edge in face.edge_keys)
     if max(usage.values())>2 or not any(n==1 for n in usage.values()):
         return 'Region needs a valid open boundary / 請使用具有有效外邊界的平面網格'
+    # Road centerlines (docs/PLAN.md §4.1): loose edges belonging to no face. They
+    # must not touch the region boundary, or boundary detection (Face Count == 1)
+    # gets confused where a road edge and a boundary edge share a vertex.
+    boundary_verts={v for edge,n in usage.items() if n==1 for v in edge}
+    road_edges=[e for e in mesh.edges if e.key not in usage]
+    if any(v in boundary_verts for e in road_edges for v in e.key):
+        return 'Road centerline edges must not touch the region boundary / 道路邊不得與區域邊界共用頂點'
+    total_road_length=sum((mesh.vertices[a].co-mesh.vertices[b].co).length for a,b in (e.key for e in road_edges))
+    if total_road_length>5000:
+        return 'Prototype limit: total road centerline length 5,000 m / 道路中心線總長上限 5,000 公尺'
+    return None
+
+
+def validate_road_curve(region_obj,curve_obj):
+    """Optional external 'Road Curves' object (docs/PLAN.md §4.1 decision 1)."""
+    if curve_obj is None: return None
+    if curve_obj is region_obj: return 'Road curve object cannot be the region itself / 道路曲線不能是區域自己'
+    if curve_obj.type!='CURVE': return 'Road curve object must be a Curve / 道路曲線物件必須是 Curve 類型'
     return None
 
 
@@ -92,8 +110,8 @@ class TCITY_OT_seed(bpy.types.Operator):
 
 
 class TCITY_OT_upgrade(bpy.types.Operator):
-    bl_idname='tcity.upgrade';bl_label='Upgrade District to 0.4';bl_options={'REGISTER','UNDO'}
-    bl_description='保留區域和既有控制值，升級道路與沿街設施（原節點樹仍保留）'
+    bl_idname='tcity.upgrade';bl_label='Upgrade District to 0.5';bl_options={'REGISTER','UNDO'}
+    bl_description='保留區域和既有控制值，升級道路曲線與沿街設施（原節點樹仍保留）'
     def execute(self,context):
         mod=district_modifier(context.active_object)
         if not mod:return {'CANCELLED'}
@@ -163,7 +181,9 @@ LABELS={'Seed':'隨機種子 · Seed','Density':'建築密度','Frontage':'面�
         'Curb Height':'路緣高度 (m)','Road Thickness':'路面厚度 (m)','Road Markings':'道路標線',
         'Road Details':'排水溝蓋與人孔蓋','Utility Poles':'電線桿','Pole Spacing':'電桿最大跨距 (m)',
         'Pole Height':'電桿高度 (m)','Overhead Wires':'架空線','Cable Sag':'電線垂度 (m)',
-        'Telecom Cabinets':'電信交接箱','Cabinet Density':'電信箱出現比例'}
+        'Telecom Cabinets':'電信交接箱','Cabinet Density':'電信箱出現比例',
+        'Road Curves':'外部道路曲線物件（選配）','Smooth Streets':'平滑道路轉角',
+        'Road Resolution':'道路取樣間距 (m)','Bend Buildings to Curve':'街屋沿曲線彎折'}
 
 
 class TCITY_PT_panel(bpy.types.Panel):
@@ -171,7 +191,7 @@ class TCITY_PT_panel(bpy.types.Panel):
     bl_space_type='VIEW_3D';bl_region_type='UI';bl_category='TCity'
     def draw(self,context):
         layout=self.layout
-        layout.label(text='TAIWAN STREETS / 0.4',icon='MOD_NODES')
+        layout.label(text='TAIWAN STREETS / 0.5',icon='MOD_NODES')
         layout.operator('tcity.add_demo',text='新增範例街區',icon='ADD')
         layout.operator('tcity.generate',text='從選取區域生成',icon='MESH_GRID')
         mod=district_modifier(context.active_object)
@@ -187,12 +207,15 @@ class TCITY_PT_panel(bpy.types.Panel):
             row.operator('tcity.street_preset',text=label).preset=key
         layout.separator();layout.operator('tcity.next_seed',text='換一個街區變化',icon='FILE_REFRESH')
         box=None
-        headers={'Seed':'生成設定','Frontage':'街廓尺寸','Min Floors':'建築組成','Signs':'建築細節','Road Surface':'道路與人行道','Utility Poles':'沿街設施'}
+        headers={'Seed':'生成設定','Frontage':'街廓尺寸','Road Curves':'道路曲線（選配）','Min Floors':'建築組成','Signs':'建築細節','Road Surface':'道路與人行道','Utility Poles':'沿街設施'}
         display=[s[0] for s in SOCKETS]
         display.remove('Metal Shed Mix');display.insert(display.index('Townhouse Mix')+1,'Metal Shed Mix')
         display.remove('Rooftop Addition Mix');display.insert(display.index('Metal Shed Mix')+1,'Rooftop Addition Mix')
         for name in display:
-            if name in headers:box=layout.box();box.label(text=headers[name])
+            if name in headers:
+                box=layout.box();box.label(text=headers[name])
+                if name=='Road Curves':
+                    box.label(text='Tab 編輯區域網格內畫游離邊當道路中心線')
             draw_control(box,mod,name,LABELS[name])
         layout.separator();layout.operator('tcity.bake_copy',text='建立實體網格複本',icon='DUPLICATE')
         layout.label(text='Tab 編輯邊界 · Geometry Nodes 可直接修改')

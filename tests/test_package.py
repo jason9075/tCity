@@ -9,7 +9,7 @@ import bpy
 ROOT=Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix='tcity-package-') as directory:
     root=Path(directory)
-    with zipfile.ZipFile(ROOT/'dist'/'tcity-0.4.0.zip') as archive:
+    with zipfile.ZipFile(ROOT/'dist'/'tcity-0.5.0.zip') as archive:
         names=archive.namelist()
         assert 'blender_manifest.toml' in names
         assert 'fonts/TCitySigns.otf' in names
@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix='tcity-package-') as directory:
     # Ensure Chinese text became mesh geometry even without external system fonts.
     from tcity.assets import find_font
     assert str(root) in find_font().filepath
-    report={'blender':bpy.app.version_string,'package':'tcity-0.4.0.zip',
+    report={'blender':bpy.app.version_string,'package':'tcity-0.5.0.zip',
             'result':'PASS','instances':count,'bundled_font':True,'isolated_import':True}
     tcity.unregister()
     (ROOT/'dist'/'package_test_results.json').write_text(json.dumps(report,indent=2))
