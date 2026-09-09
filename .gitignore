@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+*.blend1
+.venv/
+build/
+
+# 發布與建置產物（可由 scripts/ 重新產生）
+dist/
+*.blend
+*.zip
+
+# 渲染預覽（可用 scripts/render_*.py 重跑），只保留 README 引用的幾張
+renders/*
+!renders/streets_closeup.png
+!renders/streets_overview.png
+!renders/utilities_detail.png
+
+# 未被文件引用的大圖
+docs/research/v02_before.png
