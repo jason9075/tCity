@@ -190,6 +190,8 @@ Road Curves (Object socket，選配) ──► Object Info (Relative) ───�
 - 路口附近的基地由 4.3 的 Group ID 規則自動排除；補上 roadmap 已列的**轉角雙立面模組**。
 - 架空線在路口中斷（沿用邊界防護的射線邏輯，改成對其他街的路面射線）。
 
+**0.6.3 後續更新**：轉角雙立面模組已補上，但做成簡化版而非專用模型——兩片既有 `_facade()` 立面繞角落轉 90° 拼接、圓角磁磚牆角銜接（`residential.py` `build_corner()`），只處理近似直角路口（`roads.py` `_place_side()` 用crossing road 的 tangent 判斷垂直度），角地基地位置額外沿本排街道方向推出 `outer + 半棟寬` 以避開路口鋪面。已知限制：對稱十字路口的同一角可能被兩條街道各自判定為轉角而各放一棟，未做跨街道去重；細節見 [`tcity/README.md`](../tcity/README.md) 0.6.3 段落與 [`roadmap.md`](roadmap.md)。
+
 ### 0.7.0 — 街廓與地面收尾
 
 - **收斂成單一管線**：網格模式改寫為內建直線曲線產生器，移除雙分支（決定 3）。

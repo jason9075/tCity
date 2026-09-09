@@ -136,6 +136,7 @@ SOCKETS = [
     ('Ground','NodeSocketBool',True,None,None,'Region surface and painted roads / 地面'),
     ('Metal Shed Mix','NodeSocketFloat',0.,0,1,'Share of one-storey corrugated metal workshops; exempt from floor range / 獨棟鐵皮屋比例'),
     ('Rooftop Addition Mix','NodeSocketFloat',.85,0,1,'Probability of inhabited rooftop extensions; tanks and stair cores remain / 住宅頂樓加蓋比例'),
+    ('Corner Buildings','NodeSocketBool',True,None,None,'Dual-frontage buildings at near-right-angle curved-road junctions instead of empty corner lots (curved streets only) / 轉角雙立面建築'),
     ('Road Surface','NodeSocketBool',True,None,None,'Solid asphalt carriageway and rear alleys / 實體道路面'),
     ('Sidewalks','NodeSocketBool',True,None,None,'Raised paved islands and curb faces / 人行道與路緣'),
     ('Sidewalk Width','NodeSocketFloat',1.25,.8,3.,'Reserved frontage/side pavement width in metres / 人行道寬度'),

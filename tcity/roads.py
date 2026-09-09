@@ -380,7 +380,7 @@ def _inside(g,p,region_geo,boundary_sel,pos,radius):
     return g.boolean('AND',ray.outputs['Is Hit'],g.math('GREATER_THAN',prox.outputs['Distance'],radius))
 
 
-def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,side):
+def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_points,side):
     """One row of parcels on one side of the streets, resampled along the offset
     building line (docs/PLAN.md §4.3); optionally bent to follow the curve."""
     outer=g.math('ADD',g.math('MULTIPLY',p['Road Width'],.5),p['Sidewalk Width'])
@@ -395,9 +395,6 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,side):
     site_tangent=g.node('GeometryNodeInputTangent').outputs[0]
     stsep=g.node('ShaderNodeSeparateXYZ');g.put(site_tangent,stsep.inputs[0])
     site_normal=g.vector(g.math('MULTIPLY',stsep.outputs['Y'],-1),stsep.outputs['X'],0)
-    facing=_scale(g,site_normal,float(side))
-    align=g.node('FunctionNodeAlignRotationToVector','Face nearest street',axis='Y')
-    g.put(facing,align.inputs['Vector'])
     param=g.node('GeometryNodeSplineParameter')
     tagged=_store(g,frontage.outputs[0],'tc_site_u',param.outputs['Length'],'FLOAT')
     site_pos=g.node('GeometryNodeInputPosition').outputs[0]
@@ -406,9 +403,28 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,side):
     tagged=_store(g,tagged,'tc_site_normal',site_normal,'FLOAT_VECTOR')
     curve_id=_named(g,'tc_curve_id','INT')
     tagged=_store(g,tagged,'tc_site_curve_id',curve_id,'INT')
+    # 0.6.3 corner buildings: which end of this row's own spline the site is
+    # closer to, 0=start/1=end, needed once past CurveToPoints below (see the
+    # handedness comment further down).
+    tagged=_store(g,tagged,'tc_site_factor',param.outputs['Factor'],'FLOAT')
     topoints=g.node('GeometryNodeCurveToPoints',f'Building line lots {side:+d}',mode='EVALUATED')
     g.put(tagged,topoints.inputs['Curve'])
     points=topoints.outputs['Points']
+    # Read tc_site_tangent/tc_site_normal back as stored named attributes, not the
+    # live Input Tangent/Vector Math field, for the alignment below: Curve To
+    # Points + the SeparateGeometry filters further down move everything off the
+    # curve domain, and a curve-only field like Input Tangent silently evaluates
+    # to a degenerate (zero) vector once it's read back past that point — which
+    # made every instance's Rotation input collapse to identity (verified via a
+    # standalone AlignRotationToVector probe) unless Bend Buildings to Curve was
+    # on to paper over it by rebuilding orientation from these same *stored*
+    # attributes. Corner buildings (0.6.3) never go through that bend step, so
+    # they need this fixed here rather than relying on it being masked.
+    stored_normal=_named(g,'tc_site_normal','FLOAT_VECTOR')
+    stored_tangent=_named(g,'tc_site_tangent','FLOAT_VECTOR')
+    facing=_scale(g,stored_normal,float(side))
+    align=g.node('FunctionNodeAlignRotationToVector','Face nearest street',axis='Y')
+    g.put(facing,align.inputs['Vector'])
     idx=g.node('GeometryNodeInputIndex').outputs[0]
     site_offset=0 if side>0 else 500000
     site_id=g.math('ADD',idx,site_offset)
@@ -426,17 +442,99 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,side):
     g.put(centerline_id,prox_own.inputs['Group ID']);g.put(own_id,prox_own.inputs['Sample Group ID'])
     own_is_nearest=g.math('LESS_THAN',prox_own.outputs['Distance'],g.math('ADD',prox_any.outputs['Distance'],.05))
     occupied=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,43),p['Density'])
-    choose=g.boolean('AND',g.boolean('AND',inside,own_is_nearest),occupied)
+
+    # 0.6.3 corner buildings (docs/roadmap.md "轉角雙立面模組"): a site excluded by
+    # own_is_nearest (i.e. genuinely closer to a *different* road than its own) is
+    # exactly the gap a real junction leaves next to its outer corner. Simplified
+    # scope: only fill it in when that other road is close by, roughly
+    # perpendicular to this one, and there is an actual detected junction nearby —
+    # anything sharper/shallower or without a real junction stays an empty lot,
+    # same as before.
+    #
+    # A resampled row's site right next to a junction sits at (or extremely close
+    # to) the crossing road's own centerline — Resample Curve always forces both
+    # of a spline's endpoints in, and the exclusion zone this leaves is at most
+    # ~outer wide (own_dist stays ~outer while any_dist shrinks to ~arc-length
+    # from the junction). That makes the *position* delta to the nearest other
+    # point (prox_any) too close to zero to read a reliable direction from, so
+    # both "is this really a near-right-angle crossing" and "which side does the
+    # crossing road lie on" are answered from *directions* instead of positions:
+    # the other road's own tangent, sampled at whichever of its points is
+    # nearest, via Sample Nearest + Sample Index rather than Geometry Proximity
+    # (which only returns a position/distance, not an attribute at that point).
+    fillet_radius=g.math('ADD',outer,.5)
+    prox_junction=g.node('GeometryNodeProximity',f'Distance to nearest junction (site {side:+d})',target_element='POINTS')
+    g.put(junction_points,prox_junction.inputs['Geometry']);g.put(pos,prox_junction.inputs['Sample Position'])
+    near_junction=g.boolean('AND',prox_junction.outputs['Is Valid'],
+                             g.math('LESS_THAN',prox_junction.outputs['Distance'],g.math('ADD',fillet_radius,p['Frontage'])))
+    close_enough=g.math('LESS_THAN',prox_any.outputs['Distance'],g.math('ADD',outer,p['Frontage']))
+    dense_tangent_pts=g.node('GeometryNodeCurveToPoints',f'Tangent-tagged centerline points {side:+d}',mode='EVALUATED')
+    g.put(dense,dense_tangent_pts.inputs['Curve'])
+    nearest=g.node('GeometryNodeSampleNearest',f'Nearest point on any street {side:+d}',domain='POINT')
+    g.put(dense_tangent_pts.outputs['Points'],nearest.inputs['Geometry']);g.put(pos,nearest.inputs['Sample Position'])
+    sample_tangent=g.node('GeometryNodeSampleIndex',f'Tangent of nearest street {side:+d}',data_type='FLOAT_VECTOR',domain='POINT')
+    g.put(dense_tangent_pts.outputs['Points'],sample_tangent.inputs['Geometry'])
+    g.put(_named(g,'tc_tangent','FLOAT_VECTOR'),_enabled(sample_tangent,'Value'))
+    g.put(nearest.outputs['Index'],sample_tangent.inputs['Index'])
+    other_tangent=next(s for s in sample_tangent.outputs if s.name=='Value' and s.enabled)
+    # A curve's tangent direction is whichever way it happens to have been drawn,
+    # so only its *line*, not its sign, is meaningful here — abs() keeps the
+    # perpendicularity test the same regardless of draw direction.
+    near_right_angle=g.math('LESS_THAN',g.math('ABSOLUTE',_dot(g,stored_tangent,other_tangent)),.5)
+    corner_candidate=g.boolean('AND',g.boolean('AND',g.boolean('NOT',own_is_nearest),near_junction),
+                                g.boolean('AND',near_right_angle,close_enough))
+    corner_ok=g.boolean('AND',g.boolean('AND',corner_candidate,inside),g.boolean('AND',occupied,p['Corner Buildings']))
+    # Which of the two mirror-image corner assets to use. The asset's own local
+    # +X axis, once rotated to align local Y with `facing`, always ends up
+    # pointing at rotate(facing, -90 deg) = (facing.y, -facing.x) in the world
+    # (checked directly against Align Rotation To Vector's actual output, not
+    # assumed) — so wing B (which extends toward local +X on the "R" asset)
+    # should be used exactly when the safe-to-extend direction below has a
+    # positive dot product with that axis. The safe direction is simply this
+    # row's own tangent, forward if this site is nearer the end of its spline
+    # (nothing of this row continues past it), backward if nearer the start —
+    # either way, away from where this row's own ordinary buildings continue,
+    # never into them. tc_site_factor (0=start, 1=end) is read back as a stored
+    # attribute for the same domain-conversion reason as tc_site_normal above.
+    site_factor=_named(g,'tc_site_factor')
+    extend_sign=g.node('GeometryNodeSwitch','Extend toward spline end?',input_type='FLOAT')
+    g.put(g.math('GREATER_THAN',site_factor,.5),extend_sign.inputs['Switch'])
+    extend_sign.inputs['False'].default_value=-1.;extend_sign.inputs['True'].default_value=1.
+    extend_direction=_scale(g,stored_tangent,extend_sign.outputs[0])
+    facingsep=g.node('ShaderNodeSeparateXYZ');g.put(facing,facingsep.inputs[0])
+    local_x_axis=g.vector(facingsep.outputs['Y'],g.math('MULTIPLY',facingsep.outputs['X'],-1),0)
+    wrap_positive=g.math('GREATER_THAN',_dot(g,extend_direction,local_x_axis),0)
+    # The excluded slot this corner building is replacing sits right where it
+    # was excluded from — inside the crossing road's own paved width, not
+    # beside it (own_dist stays ~outer while the crossing road can be
+    # arbitrarily close along this row's tangent). extend_direction already
+    # points along this row away from where its ordinary buildings continue —
+    # the same direction wing B extends into — so sliding the whole L-shaped
+    # asset that same way by (crossing road's half-width + this asset's own
+    # half-width) clears the crossing pavement instead of straddling it, for
+    # both the near-right-angle scope and the default Frontage/Depth ratio the
+    # asset's footprint was authored at (see residential.py _CORNER_HALF).
+    half_asset_width=g.math('MULTIPLY',p['Frontage'],3.18/6.4)
+    corner_push=_scale(g,extend_direction,g.math('ADD',outer,half_asset_width))
+
+    choose_normal=g.boolean('AND',g.boolean('AND',inside,own_is_nearest),occupied)
 
     floors=g.random('INT',g.math('MINIMUM',p['Min Floors'],p['Max Floors']),g.math('MAXIMUM',p['Min Floors'],p['Max Floors']),p['Seed'],site_id,101)
     typ=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,307),p['Townhouse Mix'])
     palette=g.random('INT',0,2,p['Seed'],site_id,701)
     asset=g.math('ADD',g.math('MULTIPLY',g.math('SUBTRACT',floors,2),6),g.math('ADD',g.math('MULTIPLY',typ,3),palette))
     is_shed=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,1103),p['Metal Shed Mix'])
+    is_shed=g.boolean('AND',is_shed,g.boolean('NOT',corner_ok))
     shed_asset=g.math('ADD',36,g.random('INT',0,5,p['Seed'],site_id,1201))
     select=g.node('GeometryNodeSwitch','Rowhouse or metal workshop',input_type='INT')
     g.put(is_shed,select.inputs['Switch']);g.put(asset,select.inputs['False']);g.put(shed_asset,select.inputs['True'])
     asset=select.outputs[0]
+    corner_wrap=g.node('GeometryNodeSwitch','Corner handedness',input_type='INT')
+    g.put(wrap_positive,corner_wrap.inputs['Switch']);corner_wrap.inputs['False'].default_value=0;corner_wrap.inputs['True'].default_value=1
+    corner_asset=g.math('ADD',42,g.math('ADD',g.math('MULTIPLY',g.math('SUBTRACT',floors,2),2),corner_wrap.outputs[0]))
+    corner_select=g.node('GeometryNodeSwitch','Corner or normal asset',input_type='INT')
+    g.put(corner_ok,corner_select.inputs['Switch']);g.put(asset,corner_select.inputs['False']);g.put(corner_asset,corner_select.inputs['True'])
+    asset=corner_select.outputs[0]
     storeys=g.node('GeometryNodeSwitch','One-storey sheds',input_type='INT')
     g.put(is_shed,storeys.inputs['Switch']);g.put(floors,storeys.inputs['False']);storeys.inputs['True'].default_value=1
     floors=storeys.outputs[0]
@@ -445,8 +543,23 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,side):
                               ('tc_is_shed',is_shed,'BOOLEAN')]:
         geo=_store(g,geo,name,value,dtype)
     # geo is already a Points component (from CurveToPoints above); just filter it.
-    meshpts=g.node('GeometryNodeSeparateGeometry','Chosen lots',domain='POINT')
-    g.put(geo,meshpts.inputs['Geometry']);g.put(choose,meshpts.inputs['Selection'])
+    # Corner sites get their own unbent selection — own_is_nearest is false for
+    # every corner_ok point, so the two selections can never overlap.
+    meshpts_normal=g.node('GeometryNodeSeparateGeometry','Chosen lots',domain='POINT')
+    g.put(geo,meshpts_normal.inputs['Geometry']);g.put(choose_normal,meshpts_normal.inputs['Selection'])
+    meshpts_corner=g.node('GeometryNodeSeparateGeometry','Chosen corner lots',domain='POINT')
+    g.put(geo,meshpts_corner.inputs['Geometry']);g.put(corner_ok,meshpts_corner.inputs['Selection'])
+    # A junction vertex splits the road into separate splines, and Resample Curve
+    # always forces both of a spline's endpoints in regardless of remainder — so
+    # two different splines that both end exactly at the same junction each force
+    # a resampled point there too, landing this row's offset at the exact same
+    # world position twice. Collapse those coincident corner candidates into one
+    # before instancing so the same corner building doesn't get stacked on itself.
+    corner_pts=g.node('GeometryNodeMergeByDistance','Deduplicate coincident corner sites')
+    g.put(meshpts_corner.outputs['Selection'],corner_pts.inputs['Geometry']);corner_pts.inputs['Distance'].default_value=1.0
+    pushed=g.node('GeometryNodeSetPosition','Slide corner site clear of the crossing road')
+    g.put(corner_pts.outputs[0],pushed.inputs['Geometry']);g.put(corner_push,pushed.inputs['Offset'])
+    corner_pts=pushed
 
     named=g.node('GeometryNodeInputNamedAttribute',data_type='INT');named.inputs['Name'].default_value='tc_asset'
     shed_attr=g.node('GeometryNodeInputNamedAttribute',data_type='BOOLEAN');shed_attr.inputs['Name'].default_value='tc_is_shed'
@@ -454,23 +567,33 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,side):
     addon_probability=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],parcel_attr.outputs['Attribute'],1601),p['Rooftop Addition Mix'])
     scale=g.vector(g.math('DIVIDE',p['Frontage'],6.4),g.math('DIVIDE',p['Depth'],12),1)
     rotation=align.outputs['Rotation']
-    pieces=[]
-    for key,toggle in [('Buildings','Buildings'),('Signs','Signs'),('Roofs','Rooftops'),('Street life','Street Life'),('Additions','Rooftops')]:
-        collection=g.node('GeometryNodeCollectionInfo',key)
-        collection.inputs['Collection'].default_value=cols[key]
-        collection.inputs['Separate Children'].default_value=True
-        collection.inputs['Reset Children'].default_value=True
-        instance=g.node('GeometryNodeInstanceOnPoints',key+f' on curved lots {side:+d}')
-        g.put(meshpts.outputs['Selection'],instance.inputs['Points'])
-        g.put(collection.outputs['Instances'],instance.inputs['Instance'])
-        instance.inputs['Pick Instance'].default_value=True
-        g.put(named.outputs['Attribute'],instance.inputs['Instance Index'])
-        g.put(rotation,instance.inputs['Rotation']);g.put(scale,instance.inputs['Scale'])
-        selection=p[toggle] if key=='Buildings' else g.boolean('AND',p[toggle],p['Buildings'])
-        if key=='Additions':selection=g.boolean('AND',selection,g.boolean('AND',addon_probability,g.boolean('NOT',shed_attr.outputs['Attribute'])))
-        g.put(selection,instance.inputs['Selection'])
-        pieces.append(instance.outputs['Instances'])
-    return _bend(g,p,dense_side,pieces,side)
+
+    def instance_kit(points_selection,label):
+        pieces=[]
+        for key,toggle in [('Buildings','Buildings'),('Signs','Signs'),('Roofs','Rooftops'),('Street life','Street Life'),('Additions','Rooftops')]:
+            collection=g.node('GeometryNodeCollectionInfo',key+label)
+            collection.inputs['Collection'].default_value=cols[key]
+            collection.inputs['Separate Children'].default_value=True
+            collection.inputs['Reset Children'].default_value=True
+            instance=g.node('GeometryNodeInstanceOnPoints',key+label)
+            g.put(points_selection,instance.inputs['Points'])
+            g.put(collection.outputs['Instances'],instance.inputs['Instance'])
+            instance.inputs['Pick Instance'].default_value=True
+            g.put(named.outputs['Attribute'],instance.inputs['Instance Index'])
+            g.put(rotation,instance.inputs['Rotation']);g.put(scale,instance.inputs['Scale'])
+            selection=p[toggle] if key=='Buildings' else g.boolean('AND',p[toggle],p['Buildings'])
+            if key=='Additions':selection=g.boolean('AND',selection,g.boolean('AND',addon_probability,g.boolean('NOT',shed_attr.outputs['Attribute'])))
+            g.put(selection,instance.inputs['Selection'])
+            pieces.append(instance.outputs['Instances'])
+        return pieces
+
+    normal_pieces=instance_kit(meshpts_normal.outputs['Selection'],f' on curved lots {side:+d}')
+    # Corner buildings are a fixed L-shape baked around the junction's outer
+    # corner; bending them along the row (which only makes sense for a single
+    # frontage-wide instance) would tear the sideways wing away from its anchor,
+    # so they stay rigid regardless of the Bend Buildings to Curve toggle.
+    corner_pieces=instance_kit(corner_pts.outputs[0],f' corner {side:+d}')
+    return _bend(g,p,dense_side,normal_pieces,side)+corner_pieces
 
 
 def _bend(g,p,frontage_curve,pieces,side):
@@ -511,7 +634,7 @@ def _bend(g,p,frontage_curve,pieces,side):
     return bent
 
 
-def build_sites(g,p,cols,region_geo,boundary_sel,centerline):
+def build_sites(g,p,cols,region_geo,boundary_sel,centerline,junction_points):
     dense=g.node('GeometryNodeResampleCurve','Dense centerline for offsets')
     g.put(centerline,dense.inputs['Curve']);dense.inputs['Mode'].default_value='Length';g.put(.25,dense.inputs['Length'])
     tangent=g.node('GeometryNodeInputTangent').outputs[0]
@@ -525,7 +648,7 @@ def build_sites(g,p,cols,region_geo,boundary_sel,centerline):
     g.put(centerline,centerline_pts.inputs['Curve'])
     pieces=[]
     for side in (1,-1):
-        pieces+=_place_side(g,p,cols,region_geo,boundary_sel,centerline_pts.outputs['Points'],dense_geo,side)
+        pieces+=_place_side(g,p,cols,region_geo,boundary_sel,centerline_pts.outputs['Points'],dense_geo,junction_points,side)
     return pieces
 
 
@@ -679,7 +802,7 @@ def curve_district(g,p,cols,region_geo,road_mesh_geo,boundary_sel,road_material_
     """Entry point for the whole curved-road branch. Returns (geometry, has_curve)."""
     centerline,has_curve,junction_points,has_junctions=build_centerline(g,p,region_geo,road_mesh_geo)
     surface,half,outer=build_surface(g,p,centerline,junction_points,has_junctions,road_material_fn)
-    sites=build_sites(g,p,cols,region_geo,boundary_sel,centerline)
+    sites=build_sites(g,p,cols,region_geo,boundary_sel,centerline,junction_points)
     furniture=build_furniture(g,p,region_geo,boundary_sel,centerline)
     wires=build_wires(g,p,region_geo,boundary_sel,centerline,junction_points)
     return _join(g,surface+sites+furniture+wires,'Curved district layers'),has_curve

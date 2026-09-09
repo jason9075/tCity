@@ -2,7 +2,7 @@
 bl_info = {
     'name': 'TCity — Taiwan Districts',
     'author': 'TCity contributors',
-    'version': (0,6,2),
+    'version': (0,6,3),
     'blender': (5,2,0),
     'location': 'View3D > Sidebar > TCity',
     'description': 'Generate Taiwanese mixed-use streets from a filled planar region',

@@ -2,11 +2,17 @@
 
 在 Blender 中，將一塊已填面的區域轉為台灣住商混合街區。使用 **Geometry Nodes** 即時生成配置，附原創磁磚街屋、公寓、騎樓、陽台鐵窗、冷氣外機、繁體中文招牌、住宅頂加、水塔、曬衣與盆栽。
 
-**版本：0.6.2，已實測 Blender 5.2.1 LTS。** 這是可使用、可繼續開發的原型，並非 iCity 官方產品或完整功能替代品。場景偏向中景與街區預覽；還不是近距離寫實建築資產庫。
+**版本：0.6.3，已實測 Blender 5.2.1 LTS。** 這是可使用、可繼續開發的原型，並非 iCity 官方產品或完整功能替代品。場景偏向中景與街區預覽；還不是近距離寫實建築資產庫。
 
 ![道路與沿街設施實際渲染](renders/streets_closeup.png)
 
 ![電信箱與人行道細節](renders/utilities_detail.png)
+
+## 0.6.3：轉角雙立面建築
+
+補上 0.6 路口留下的缺口：曲線道路的近似直角路口，原本被排除、留空的角地基地，現在放上簡化的轉角雙立面建築（兩片既有單面立面繞角落轉 90° 拼接、圓角磁磚牆角銜接），取代普通側牆外露或空地。新增 `Corner Buildings` 開關（預設開），可整體關閉回到 0.6 的空地行為。
+
+僅處理近似直角路口；銳角、鈍角或偵測不到真實路口的情況維持空地。已知限制：對稱十字路口的同一個角可能被兩條街道各自判定為轉角，因而各放一棟（尚未做跨街道去重），丁字路口不受影響。細節見 [`tcity/README.md`](tcity/README.md) 與 [`docs/roadmap.md`](docs/roadmap.md)。
 
 ## 0.6.2：台灣農地、農舍與鄉間環境
 
@@ -62,10 +68,10 @@
 ## 安裝外掛
 
 1. Blender → **Edit → Preferences → Get Extensions**，右上角選單選 **Install from Disk**。
-2. 選擇 [`dist/tcity-0.6.2.zip`](dist/tcity-0.6.2.zip)，安裝並啟用。
+2. 選擇 [`dist/tcity-0.6.3.zip`](dist/tcity-0.6.3.zip)，安裝並啟用。
 3. 在 3D View 按 `N` → **TCity** → **新增範例街區**。
 
-ZIP 包含程式碼、招牌中文字型子集與 CC0 照明 HDRI，不需要下載模型、貼圖或額外安裝 Python 套件。第一次生成會建立 42 組建築變體（36 組街屋與 6 組鐵皮屋）；同一檔案後續區域共用資產，參數各自獨立。另有四個沿街資產：電桿、電信箱、人孔蓋、排水格柵；線纜由 GN 直接產生。
+ZIP 包含程式碼、招牌中文字型子集與 CC0 照明 HDRI，不需要下載模型、貼圖或額外安裝 Python 套件。第一次生成會建立 54 組建築變體（36 組街屋、6 組鐵皮屋、12 組轉角雙立面）；同一檔案後續區域共用資產，參數各自獨立。另有四個沿街資產：電桿、電信箱、人孔蓋、排水格柵；線纜由 GN 直接產生。
 
 這台 Linux 的 Blender 系統套件啟動時曾回報 Extension Manager 缺少 `cattrs`。本專案已在 `.venv` 補齊開發用依賴，沒有修改系統 Python。可直接執行 `./scripts/open_demo.sh`：會打開範例並在本次 Blender 工作階段載入 TCity 側欄，不必先使用 Extension Manager，也不會儲存偏好設定。一般官方 Blender 安裝不需要這個工作站專用處理。
 
@@ -131,7 +137,7 @@ ZIP 包含程式碼、招牌中文字型子集與 CC0 照明 HDRI，不需要下
 
 邊界距離採基地外接圓：`0.5 × sqrt(面寬² + 進深²) + 額外退縮`。這是保守的完整容納判斷，能處理凹角與孔洞，但會在某些邊界留下比必要更大的空地。第一版不切斷或裁掉建築。
 
-Python 只建立原創資產、節點樹與 UI；**修改參數與區域時，配置由 Geometry Nodes 評估**，沒有逐幀 Python handler。道路立體裁切比舊版的單面材質需要更多運算，建議先使用 100–200 m 區域。街屋資產索引為 `(樓層 - 2) × 6 + 立面變體`（0–35），鐵皮屋為 36–41；五組集合（Buildings、Signs、Roofs、Street life、Additions）的名稱排序和索引一一對齊。`tc_parcel_id`、`tc_floors`、`tc_asset`、`tc_is_shed` 是保留在基地點上的檢查屬性。實體網格上的 `tc_layer` 可區分道路 1、人行道 2、架空線 3；`tc_span_id` 辨認線路跨段，供後續節點處理。
+Python 只建立原創資產、節點樹與 UI；**修改參數與區域時，配置由 Geometry Nodes 評估**，沒有逐幀 Python handler。道路立體裁切比舊版的單面材質需要更多運算，建議先使用 100–200 m 區域。街屋資產索引為 `(樓層 - 2) × 6 + 立面變體`（0–35），鐵皮屋為 36–41，曲線道路近似直角路口用的轉角雙立面建築為 42–53（`(樓層 - 2) × 2 + 鏡像方向`，僅正交網格分支不使用）；五組集合（Buildings、Signs、Roofs、Street life、Additions）的名稱排序和索引一一對齊。`tc_parcel_id`、`tc_floors`、`tc_asset`、`tc_is_shed` 是保留在基地點上的檢查屬性。實體網格上的 `tc_layer` 可區分道路 1、人行道 2、架空線 3；`tc_span_id` 辨認線路跨段，供後續節點處理。
 
 ## 匯出
 
@@ -142,7 +148,7 @@ Python 只建立原創資產、節點樹與 UI；**修改參數與區域時，�
 ## 現階段範圍
 
 - 正交雙排街廓；輸入為平面。尚無曲線道路、坡地貼合、OSM / 真實地籍或使用者道路曲線。
-- 42 組原創建築組合（6 種立面 × 2–7 樓，加上 6 種單層鐵皮屋），不是掃描資產。尚無轉角雙立面專用模組、廟宇、夜市攤位或高樓。
+- 54 組原創建築組合（6 種立面 × 2–7 樓，加上 6 種單層鐵皮屋與 12 組簡化轉角雙立面），不是掃描資產。轉角雙立面僅用於曲線道路的近似直角路口，且是既有立面拼接而非專用模型；尚無廟宇、夜市攤位或高樓。
 - 道路標線是展示用程序化材質，並非交通工程配置；不含交通動畫、路線導航或正式道路網路資料。
 - 空置基地保留鋪面平台，尚未自動生成公園或停車場。
 - 建議先使用 100–200 m 的區域。新增區域時邊長上限 1,000 m；GN 安全上限為 20,000 個候選基地。建立後若把網格拉得更大，可能觸及此上限。
@@ -159,7 +165,7 @@ blender -b --factory-startup --python-exit-code 1 --python tests/test_package.py
 blender -b --factory-startup --python-exit-code 1 --python tests/test_upgrade.py
 blender -b --factory-startup --python-exit-code 1 --python tests/test_demo.py
 blender --command extension build --source-dir tcity --output-dir dist
-blender --command extension validate dist/tcity-0.6.2.zip
+blender --command extension validate dist/tcity-0.6.3.zip
 ```
 
 主要檔案：`tcity/residential.py` 台北住宅與頂加、`tcity/surfaces.py` 程序材質、`tcity/lived_in.py` 生活細節、`tcity/assets.py` 資產共用工具、`tcity/infrastructure.py` 道路與連線節點、`tcity/street_assets.py` 沿街資產、`tcity/nodes.py` 主節點建構、`tcity/__init__.py` 外掛 UI / 操作、`scripts/build_demo.py` 展示場景、`tests/test_blender.py` 實機整合測試。
