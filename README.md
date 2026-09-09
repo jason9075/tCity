@@ -2,11 +2,19 @@
 
 在 Blender 中，將一塊已填面的區域轉為台灣住商混合街區。使用 **Geometry Nodes** 即時生成配置，附原創磁磚街屋、公寓、騎樓、陽台鐵窗、冷氣外機、繁體中文招牌、住宅頂加、水塔、曬衣與盆栽。
 
-**版本：0.4.0，已實測 Blender 5.2.0 LTS。** 這是可使用、可繼續開發的原型，並非 iCity 官方產品或完整功能替代品。場景偏向中景與街區預覽；還不是近距離寫實建築資產庫。
+**版本：0.6.2，已實測 Blender 5.2.1 LTS。** 這是可使用、可繼續開發的原型，並非 iCity 官方產品或完整功能替代品。場景偏向中景與街區預覽；還不是近距離寫實建築資產庫。
 
 ![道路與沿街設施實際渲染](renders/streets_closeup.png)
 
 ![電信箱與人行道細節](renders/utilities_detail.png)
+
+## 0.6.2：台灣農地、農舍與鄉間環境
+
+新增獨立的 Geometry Nodes 農地生成器，包含不規則外框裁切、長條田區、綠稻與金黃稻、蔬菜、果園、休耕與蓄水田、田埂、農路和實體灌溉溝。第二輪依真實照片新增紅磚平房、L 形院落與磁磚農舍細節，以及路緣電桿、有支撐的架空線、自然群聚的闊葉樹與竹叢。
+
+直接開啟 [農地範例](dist/TCity_Taiwan_Farmland.blend)，或安裝後在 `N → TCity → 台灣農地` 新增。完整操作、效能及範圍見 [農地使用說明](docs/farmland.md)，照片來源見 [鄉村實景研究](docs/research/rural-landscape.md)。可編輯不規則外框及孔洞；內部農路目前仍自動沿變形田格配置。
+
+城市功能仍使用 v0.6 節點群組；本次農地更新不代表 `docs/PLAN.md` 中尚未完成的 0.7 道路收尾計畫已實作。以下 0.4／0.3 段落保留歷史功能介紹。
 
 ## 0.4：道路、電桿與電信箱
 
@@ -54,7 +62,7 @@
 ## 安裝外掛
 
 1. Blender → **Edit → Preferences → Get Extensions**，右上角選單選 **Install from Disk**。
-2. 選擇 [`dist/tcity-0.4.0.zip`](dist/tcity-0.4.0.zip)，安裝並啟用。
+2. 選擇 [`dist/tcity-0.6.2.zip`](dist/tcity-0.6.2.zip)，安裝並啟用。
 3. 在 3D View 按 `N` → **TCity** → **新增範例街區**。
 
 ZIP 包含程式碼、招牌中文字型子集與 CC0 照明 HDRI，不需要下載模型、貼圖或額外安裝 Python 套件。第一次生成會建立 42 組建築變體（36 組街屋與 6 組鐵皮屋）；同一檔案後續區域共用資產，參數各自獨立。另有四個沿街資產：電桿、電信箱、人孔蓋、排水格柵；線纜由 GN 直接產生。
@@ -151,7 +159,7 @@ blender -b --factory-startup --python-exit-code 1 --python tests/test_package.py
 blender -b --factory-startup --python-exit-code 1 --python tests/test_upgrade.py
 blender -b --factory-startup --python-exit-code 1 --python tests/test_demo.py
 blender --command extension build --source-dir tcity --output-dir dist
-blender --command extension validate dist/tcity-0.4.0.zip
+blender --command extension validate dist/tcity-0.6.2.zip
 ```
 
 主要檔案：`tcity/residential.py` 台北住宅與頂加、`tcity/surfaces.py` 程序材質、`tcity/lived_in.py` 生活細節、`tcity/assets.py` 資產共用工具、`tcity/infrastructure.py` 道路與連線節點、`tcity/street_assets.py` 沿街資產、`tcity/nodes.py` 主節點建構、`tcity/__init__.py` 外掛 UI / 操作、`scripts/build_demo.py` 展示場景、`tests/test_blender.py` 實機整合測試。

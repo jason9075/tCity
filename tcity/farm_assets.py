@@ -48,7 +48,8 @@ def palette():
                   field_material('Orchard floor',(.075,.105,.042)),
                   field_material('Fallow furrows',(.20,.155,.092),True),
                   field_material('Flooded mud',(.073,.10,.079),wet=True),
-                  field_material('Farmyard earth',(.14,.15,.08))],
+                  field_material('Farmyard earth',(.14,.15,.08)),
+                  field_material('Woodland leaf litter',(.065,.084,.029))],
         'bund':field_material('Grass and earth bund',(.15,.18,.072)),
         'road':field_material('Faded rural asphalt',(.12,.125,.116)),
         'concrete':field_material('Irrigation concrete',(.31,.32,.275)),
@@ -160,7 +161,7 @@ def facility(b,p,variant):
 
 
 def ensure_farm_assets():
-    name='TCity • Farm kit v0.1'
+    name='TCity • Farm kit v0.2'
     if name in bpy.data.collections:return bpy.data.collections[name]
     col=bpy.data.collections.new(name);col.use_fake_user=True;p=palette()
     for m in p['leaves']:
@@ -176,7 +177,10 @@ def ensure_farm_assets():
         rice(b,p)
         b.verts=[(x*.32,y*.32,z*.24) for x,y,z in b.verts]
     builders.append(grass)
+    from .rural_assets import farmhouse,woodland
+    builders[6]=lambda b:farmhouse(b,0)
+    builders.extend([lambda b:farmhouse(b,1),lambda b:farmhouse(b,2),lambda b:woodland(b,p,0),lambda b:woodland(b,p,1)])
     for i,build in enumerate(builders):
-        b=MeshBuilder();build(b);obj=b.object('TC_FARM_%02d_'%i+['Rice_green','Rice_gold','Vegetables','Orchard','Metal_shed','Growing_tunnels','Farmhouse','Bund_grass'][i],col)
+        b=MeshBuilder();build(b);obj=b.object('TC_FARM_%02d_'%i+['Rice_green','Rice_gold','Vegetables','Orchard','Metal_shed','Growing_tunnels','Farmhouse','Bund_grass','Brick_farmhouse','Courtyard_home','Woodland_tree','Bamboo_clump'][i],col)
         obj['tc_farm_asset']=i;obj.use_fake_user=True
     return col

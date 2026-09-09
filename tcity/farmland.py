@@ -9,20 +9,26 @@ from .nodes import Graph, set_control
 from .farm_assets import palette, ensure_farm_assets
 from .roads import _join, _transform, _mat, _gate, _store, _named, _index_switch, _boolean_op, _self_union
 
-GROUP_NAME='TCity • Taiwan Farmland v0.1'
+GROUP_NAME='TCity • Taiwan Farmland v0.2'
 SOCKETS=[
     ('Seed','NodeSocketInt',31,0,100000,'農地分割與作物變化 / Deterministic layout and crops'),
     ('Plot Width','NodeSocketFloat',22.,8.,80.,'田塊平均短邊，公尺 / Average parcel width'),
     ('Plot Length','NodeSocketFloat',42.,12.,120.,'田塊平均長邊，公尺 / Average parcel length'),
     ('Irregularity','NodeSocketFloat',.65,0,1,'共享邊界的偏移，不是互相重疊的隨機矩形 / Shared-edge displacement'),
     ('Field Angle','NodeSocketFloat',0.,-180,180,'整組田區相對區域的旋轉角度 / Field bearing in degrees'),
-    ('Bund Width','NodeSocketFloat',1.1,.5,2.5,'田埂名目宽度；隨田形略有變化 / Nominal earth bund width'),
+    ('Bund Width','NodeSocketFloat',1.1,.5,2.5,'田埂名目寬度；隨田形略有變化 / Nominal earth bund width'),
     ('Rice Mix','NodeSocketFloat',.72,0,1,'其他用途分配後，水稻相對蔬菜的比例 / Rice versus vegetables in remaining plots'),
     ('Ripening','NodeSocketFloat',.38,0,1,'稻田轉為金黃的比例 / Share of rice plots ripening'),
     ('Orchard Mix','NodeSocketFloat',.12,0,.8,'果園機率，設施之後分配 / Conditional orchard probability'),
     ('Fallow Mix','NodeSocketFloat',.12,0,.8,'休耕裸土機率 / Conditional fallow probability'),
     ('Flooded Mix','NodeSocketFloat',.06,0,.8,'整地蓄水田機率 / Conditional flooded-paddy probability'),
     ('Structure Mix','NodeSocketFloat',.07,0,.6,'農舍、鐵皮農用棚與栽培隧道用地機率 / Facility parcel probability'),
+    ('Woodland Mix','NodeSocketFloat',.10,0,.7,'自然樹林用地機率，與整齊果園分開 / Conditional woodland probability'),
+    ('Trees','NodeSocketBool',True,None,None,'自然雜木與竹叢 / Woodland trees and bamboo'),
+    ('Utility Poles','NodeSocketBool',True,None,None,'沿農路的混凝土電桿 / Rural roadside poles'),
+    ('Pole Spacing','NodeSocketFloat',30.,12.,60.,'農路段內的最大電桿跨距 / Maximum supported span'),
+    ('Overhead Wires','NodeSocketBool',True,None,None,'只連接區域內有支撐電桿的線路 / Supported overhead lines'),
+    ('Cable Sag','NodeSocketFloat',.50,0,1.2,'電線跨中垂度，公尺 / Midspan cable sag'),
     ('Farm Roads','NodeSocketBool',True,None,None,'每三排與四列的農路 / Shared farm access lanes'),
     ('Road Width','NodeSocketFloat',3.2,2,6,'農路寬度，公尺 / Farm lane width'),
     ('Irrigation','NodeSocketBool',True,None,None,'具有槽底、側壁與水面的明渠 / Open concrete irrigation channels'),
@@ -125,7 +131,7 @@ def ensure_group():
     # Sequential, independently seeded probabilities. Crop IDs survive clipping.
     def chance(control,offset):return g.math('LESS_THAN',g.random('FLOAT',0,1,seed,idx,offset),p[control])
     kind=g.switch(chance('Rice Mix',101),2,g.switch(chance('Ripening',103),0,1))
-    for control,value,offset in [('Flooded Mix',5,107),('Fallow Mix',4,109),('Orchard Mix',3,113),('Structure Mix',6,127)]:
+    for control,value,offset in [('Flooded Mix',5,107),('Fallow Mix',4,109),('Orchard Mix',3,113),('Woodland Mix',7,119),('Structure Mix',6,127)]:
         kind=g.switch(chance(control,offset),kind,value)
     plan=_store(g,plan,'farm_kind',kind,'INT','FACE')
     plan=_store(g,plan,'farm_parcel',idx,'INT','FACE')
@@ -151,7 +157,8 @@ def ensure_group():
         sel=g.node('GeometryNodeSeparateGeometry',domain='EDGE');g.put(plan,sel.inputs['Geometry']);g.put(selection,sel.inputs['Selection'])
         split=g.node('GeometryNodeSplitEdges');g.put(sel.outputs[0],split.inputs['Mesh'])
         curve=g.node('GeometryNodeMeshToCurve');g.put(split.outputs[0],curve.inputs['Mesh']);return curve.outputs[0]
-    roads_curve=segments(g.boolean('OR',vr,hr));half=g.mul(p['Road Width'],.5)
+    road_selection=g.boolean('OR',vr,hr)
+    roads_curve=segments(road_selection);half=g.mul(p['Road Width'],.5)
     road_void=_gate(g,_self_union(g,g.sweep(roads_curve,g.mul(half,-1),half,-.4,.3)),p['Farm Roads'])
     road_mesh=_gate(g,_self_union(g,g.sweep(roads_curve,g.mul(half,-1),half,-.22,.095)),p['Farm Roads'])
     clip=g.prism(region,-.3,.22)
@@ -216,15 +223,28 @@ def ensure_group():
     g.put(g.math('GREATER_THAN',nz.outputs['Z'],.9),grass.inputs['Selection'])
     safe=g.boolean('AND',p['Crops'],g.math('GREATER_THAN',g.distance(g.boundary(region),pos),.20))
     pieces.append(g.instances(grass.outputs['Points'],col,7,safe,g.vector(scale,scale,scale),rot))
+    forest=g.node('GeometryNodeDistributePointsOnFaces',distribute_method='POISSON')
+    g.put(tops,forest.inputs['Mesh']);forest.inputs['Distance Min'].default_value=3.2;forest.inputs['Density Max'].default_value=.12
+    g.put(seed,forest.inputs['Seed']);g.put(g.equal(field_kind,7),forest.inputs['Selection'])
+    safe=g.boolean('AND',p['Trees'],g.math('GREATER_THAN',g.distance(edges,pos),3.2))
+    wood_index=g.random('INT',10,11,seed,idx,251)
+    wood_scale=g.random('FLOAT',.8,1.2,seed,idx,253)
+    pieces.append(g.instances(forest.outputs['Points'],col,wood_index,safe,g.vector(wood_scale,wood_scale,wood_scale),rot))
     g.section('05 / FACILITIES · grounded farm buildings on allocated yards',(7400,0))
     ray=g.ray(tops,pos,field_kind)
     valid=g.boolean('AND',ray.outputs['Is Hit'],g.equal(ray.outputs['Attribute'],6))
-    asset=g.random('INT',4,6,seed,idx,271)
-    radius=_index_switch(g,g.sub(asset,4),'FLOAT',[8.3,8.8,7.2])
+    choice=g.random('INT',0,4,seed,idx,271)
+    asset=_index_switch(g,choice,'INT',[4,5,6,8,9])
+    radius=_index_switch(g,choice,'FLOAT',[8.3,8.8,7.8,9.8,9.8])
     valid=g.boolean('AND',valid,g.math('GREATER_THAN',g.distance(edges,pos),radius))
     valid=g.boolean('AND',valid,p['Structures'])
     yard_points=_transform(g,centers.outputs[0],(0,0,.02))
-    pieces.append(g.instances(yard_points,col,asset,valid))
+    nearest=g.node('GeometryNodeProximity',target_element='FACES');g.put(road_mesh,nearest.inputs['Geometry']);g.put(pos,nearest.inputs['Sample Position'])
+    toward=g.node('ShaderNodeSeparateXYZ');g.put(g.vmath('SUBTRACT',nearest.outputs['Position'],pos),toward.inputs[0])
+    bearing=g.add(g.math('ARCTAN2',toward.outputs['Y'],toward.outputs['X']),math.pi/2)
+    pieces.append(g.instances(yard_points,col,asset,valid,rotation=g.vector(0,0,g.mul(bearing,p['Farm Roads']))))
+    from .rural_utilities import rural_utilities
+    pieces.extend(rural_utilities(g,p,plan,road_selection,region,g.boundary(region)))
     result=_transform(g,_join(g,pieces,'Taiwan farm landscape'),g.vector(0,0,low.outputs['Z']),g.vector(0,0,angle))
     g.put(result,out.inputs[0])
     # Swept lane segments overlap at bends/junctions. Resolve those volumes

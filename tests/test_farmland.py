@@ -23,7 +23,8 @@ def record(name,detail):
 def evaluate(obj):
     bpy.context.view_layer.update();dg=bpy.context.evaluated_depsgraph_get();mesh=obj.evaluated_get(dg).data
     verts=[v.co.copy() for v in mesh.vertices]
-    polygons=[(tuple(p.vertices),p.normal.copy(),p.center.copy(),p.area) for p in mesh.polygons]
+    mesh.calc_loop_triangles()
+    polygons=[(tuple(t.vertices),t.normal.copy(),sum((verts[i] for i in t.vertices),Vector())/3,t.area) for t in mesh.loop_triangles]
     layers=[a.value for a in mesh.attributes['farm_layer'].data]
     inst=[]
     for i in dg.object_instances:
@@ -58,8 +59,9 @@ def coverage(obj,inside):
 def run():
     start=time.monotonic();bpy.ops.object.select_all(action='SELECT');bpy.ops.object.delete(use_global=False);tcity.register()
     obj=make_farmland(width=120,depth=100);mod=farmland_modifier(obj)
+    set_control(mod,'Woodland Mix',0.)
     verts,polys,layers,inst,first=evaluate(obj)
-    assert set(layers)=={10,11,12,13,14},Counter(layers)
+    assert set(layers)=={10,11,12,13,14,15},Counter(layers)
     assert len(inst)>3000,len(inst)
     assert not list(mod.node_warnings),list(mod.node_warnings)
     for layer,height in [(10,.02),(11,.13),(12,.095),(13,.12),(14,-.115)]:
@@ -71,15 +73,15 @@ def run():
     set_control(mod,'Seed',31);assert evaluate(obj)[-1]==first
     record('deterministic_live_seed','Same seed reproduces mesh and every instance transform')
     # Top-surface partition: channel floor counts once; its water surface does not.
-    area=sum(area*normal.z for ids,normal,center,area in polys if normal.z>.99 and layers[ids[0]]!=14)
+    area=sum(area*normal.z for ids,normal,center,area in polys if normal.z>.99 and layers[ids[0]] not in {14,15})
     expected=120*100-26*22/2
     assert abs(area-expected)<expected*.002,(area,expected)
     record('surface_partition',{'projected_area':area,'region_area':expected})
-    for control,absent in [('Farm Roads',{12}),('Irrigation',{13,14})]:
+    for control,absent in [('Farm Roads',{12,15}),('Irrigation',{13,14})]:
         set_control(mod,control,False);v,p,l,i,d=evaluate(obj);assert not(set(l)&absent)
         assert 10 in l and i
         set_control(mod,control,True)
-    set_control(mod,'Crops',False);assert all(4<=o['tc_farm_asset']<=6 for o,_ in evaluate(obj)[3])
+    set_control(mod,'Crops',False);assert all(o.get('tc_infra_kind')=='Pole' or o.get('tc_farm_asset') in {4,5,6,8,9} for o,_ in evaluate(obj)[3])
     set_control(mod,'Crops',True)
     record('independent_switches','Roads, irrigation and crops update evaluated output')
     set_control(mod,'Plant Spacing',1.4);sparse=len(evaluate(obj)[3]);set_control(mod,'Plant Spacing',.72)
@@ -88,11 +90,11 @@ def run():
     # Force individual crop families; implicit Index must never turn trees into houses.
     for control in ('Orchard Mix','Fallow Mix','Flooded Mix','Structure Mix'):set_control(mod,control,0.)
     set_control(mod,'Rice Mix',1.);set_control(mod,'Ripening',0.)
-    assert {o['tc_farm_asset'] for o,_ in evaluate(obj)[3]}=={0,7}
-    set_control(mod,'Ripening',1.);assert {o['tc_farm_asset'] for o,_ in evaluate(obj)[3]}=={1,7}
-    set_control(mod,'Rice Mix',0.);assert {o['tc_farm_asset'] for o,_ in evaluate(obj)[3]}=={2,7}
+    assert {o['tc_farm_asset'] for o,_ in evaluate(obj)[3] if 'tc_farm_asset' in o}=={0,7}
+    set_control(mod,'Ripening',1.);assert {o['tc_farm_asset'] for o,_ in evaluate(obj)[3] if 'tc_farm_asset' in o}=={1,7}
+    set_control(mod,'Rice Mix',0.);assert {o['tc_farm_asset'] for o,_ in evaluate(obj)[3] if 'tc_farm_asset' in o}=={2,7}
     set_control(mod,'Orchard Mix',.8)
-    kinds={o['tc_farm_asset'] for o,_ in evaluate(obj)[3]};assert 3 in kinds and kinds<={2,3,7},kinds
+    kinds={o['tc_farm_asset'] for o,_ in evaluate(obj)[3] if 'tc_farm_asset' in o};assert 3 in kinds and kinds<={2,3,7},kinds
     record('crop_identity','All-green/all-golden rice, vegetables and orchard-only source indices verified')
     # Shrink to an L-shaped region with a separately triangulated hole ring.
     obj.hide_set(True);obj.hide_render=True
@@ -112,7 +114,7 @@ def run():
     # Instance positions must remain in the source's local coordinate system.
     vv,pp,ll,ii,_=evaluate(hole);assert ii
     inv=hole.matrix_world.inverted()
-    assert all(abs((inv@m).translation.z-(.13 if o['tc_farm_asset']==7 else .02))<.001 for o,m in ii)
+    assert all(abs((inv@m).translation.z-(.095 if o.get('tc_infra_kind')=='Pole' else .13 if o.get('tc_farm_asset')==7 else .02))<.001 for o,m in ii)
     record('object_transform_and_live_boundary','Object translation/rotation and Edit Mode vertex changes preserve grounding')
     for o in bpy.context.selected_objects:o.select_set(False)
     hole.select_set(True);bpy.context.view_layer.objects.active=hole
