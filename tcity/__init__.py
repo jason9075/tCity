@@ -2,7 +2,7 @@
 bl_info = {
     'name': 'TCity — Taiwan Districts',
     'author': 'TCity contributors',
-    'version': (0,6,0),
+    'version': (0,6,1),
     'blender': (5,2,0),
     'location': 'View3D > Sidebar > TCity',
     'description': 'Generate Taiwanese mixed-use streets from a filled planar region',
@@ -12,6 +12,8 @@ bl_info = {
 import math
 import bpy
 from .nodes import add_modifier, SOCKETS, set_control, get_control, draw_control, upgrade_modifier, GROUP_NAME
+from .farmland import farmland_modifier
+from .farm_ui import CLASSES as FARM_CLASSES
 
 
 def district_modifier(obj):
@@ -148,7 +150,7 @@ class TCITY_OT_bake(bpy.types.Operator):
     bl_description='保留程序化來源，新增可供匯出的實體網格複本（大型區域會使用較多記憶體）'
     def execute(self,context):
         obj=context.active_object
-        if not district_modifier(obj):return {'CANCELLED'}
+        if not (district_modifier(obj) or farmland_modifier(obj)):return {'CANCELLED'}
         # A temporary Realize Instances modifier leaves the original node tree intact.
         copy=obj.copy();copy.data=obj.data.copy();copy.name=obj.name+' • Baked'
         context.collection.objects.link(copy)
@@ -164,7 +166,7 @@ class TCITY_OT_bake(bpy.types.Operator):
         copy.data=bpy.data.meshes.new_from_object(copy.evaluated_get(dg),preserve_all_data_layers=True,depsgraph=dg)
         copy.modifiers.clear();bpy.data.node_groups.remove(tree)
         if old.users==0:bpy.data.meshes.remove(old)
-        copy['tc_region']=False
+        copy['tc_region']=False;copy['tc_farmland']=False
         # Hide the copy initially to avoid overlapping the live source.
         copy.hide_set(True);copy.hide_render=True
         self.report({'INFO'},'Baked copy created (hidden) in Outliner / 已建立隱藏的網格複本')
@@ -221,7 +223,7 @@ class TCITY_PT_panel(bpy.types.Panel):
         layout.label(text='Tab 編輯邊界 · Geometry Nodes 可直接修改')
 
 
-CLASSES=(TCITY_OT_generate,TCITY_OT_demo,TCITY_OT_seed,TCITY_OT_upgrade,TCITY_OT_preset,TCITY_OT_bake,TCITY_PT_panel)
+CLASSES=(TCITY_OT_generate,TCITY_OT_demo,TCITY_OT_seed,TCITY_OT_upgrade,TCITY_OT_preset,TCITY_OT_bake,TCITY_PT_panel)+FARM_CLASSES
 
 def register():
     for cls in CLASSES:bpy.utils.register_class(cls)
