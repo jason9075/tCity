@@ -84,6 +84,31 @@ def _spline_count(g,geo):
     return n.outputs['Spline Count']
 
 
+def _point_count(g,geo):
+    n=g.node('GeometryNodeAttributeDomainSize',component='POINTCLOUD');g.put(geo,n.inputs['Geometry'])
+    return n.outputs['Point Count']
+
+
+def _self_union(g,geo,label=''):
+    """Mesh Boolean UNION on a single (possibly multi-island, overlapping) input —
+    merges overlapping solids in place, e.g. streets meeting at a junction
+    (docs/PLAN.md 0.6.0).
+
+    Uses the FLOAT solver, not EXACT: the road cross-section's Fill Caps are a
+    non-convex N-gon (the curb step), and EXACT + Fill Caps + self-union
+    specifically collapsed the result to a small fraction of its real area
+    (down from ~1700 m² to ~200 m² in testing) even for a single straight,
+    non-branching street with no other geometry to merge with — EXACT alone
+    (via the region-clip INTERSECT) and FLOAT alone were each individually
+    fine, only this combination broke. FLOAT is measurably correct here
+    (verified against the expected swept area) and only used for this one
+    self-merge step; INTERSECT/DIFFERENCE elsewhere stay on EXACT.
+    """
+    n=g.node('GeometryNodeMeshBoolean',label or 'Self union',operation='UNION',solver='FLOAT')
+    g.put(geo,n.inputs['Mesh 2'])
+    return n.outputs['Mesh']
+
+
 def _boolean_op(g,a,b,op,label=''):
     n=g.node('GeometryNodeMeshBoolean',label or ('Curved street '+op.lower()),operation=op,solver='EXACT')
     if op=='INTERSECT':
@@ -109,6 +134,27 @@ def _region_prism(g,p,bottom,top,label=''):
     return merged.outputs[0]
 
 
+# ----------------------------------------------------------------- 0.6 junctions
+def find_junctions(g,road_mesh_geo):
+    """Points where 3+ road edges meet (docs/PLAN.md 0.6.0).
+
+    Mesh-edge input only: validate_region forbids road edges from touching the
+    region boundary, so every vertex among road_mesh_geo touches only other road
+    edges — its total edge-neighbor count is exactly its junction degree. External
+    Road Curves objects don't get junction detection (a single Curve datablock has
+    no natural vertex-degree/branching concept); tc_junction_dist just falls back
+    to "no junction nearby" for that path.
+    """
+    vn=g.node('GeometryNodeInputMeshVertexNeighbors')
+    is_junction=g.math('GREATER_THAN',vn.outputs['Vertex Count'],2.5)
+    sep=g.node('GeometryNodeSeparateGeometry','Junction vertices',domain='POINT')
+    g.put(road_mesh_geo,sep.inputs['Geometry']);g.put(is_junction,sep.inputs['Selection'])
+    pts=g.node('GeometryNodeMeshToPoints','Junction points',mode='VERTICES')
+    g.put(sep.outputs['Selection'],pts.inputs['Mesh'])
+    has_junctions=g.math('GREATER_THAN',_point_count(g,pts.outputs['Points']),0)
+    return pts.outputs['Points'],has_junctions
+
+
 # --------------------------------------------------------------- 4.1 centerline
 def build_centerline(g,p,region_geo,road_mesh_geo):
     """Combine mesh-drawn road edges with an optional external curve object.
@@ -117,8 +163,10 @@ def build_centerline(g,p,region_geo,road_mesh_geo):
     by nodes.py's ensure_group() — not a boolean selection field.
 
     Returns (curve geometry resampled by Road Resolution with tc_u/tc_curve_id/
-    tc_junction_dist/tc_markings stored, has_curve boolean field).
+    tc_junction_dist/tc_markings stored, has_curve boolean field, junction points,
+    has_junctions boolean field).
     """
+    junction_points,has_junctions=find_junctions(g,road_mesh_geo)
     mesh_curve=g.node('GeometryNodeMeshToCurve','Free edges to poly curve')
     g.put(road_mesh_geo,mesh_curve.inputs['Mesh'])
     length_node=g.node('GeometryNodeSplineLength')
@@ -155,14 +203,19 @@ def build_centerline(g,p,region_geo,road_mesh_geo):
     g.put(p['Road Resolution'],resample.inputs['Length'])
     param=g.node('GeometryNodeSplineParameter')
     resampled=_store(g,resample.outputs[0],'tc_u',param.outputs['Length'],'FLOAT')
-    total=g.node('GeometryNodeSplineLength')
-    resampled=_store(g,resampled,'tc_total_len',total.outputs['Length'],'FLOAT',domain='CURVE')
-    total_attr=_named(g,'tc_total_len')
-    u_attr=_named(g,'tc_u')
-    junction_dist=g.math('MINIMUM',u_attr,g.math('SUBTRACT',total_attr,u_attr))
-    resampled=_store(g,resampled,'tc_junction_dist',junction_dist,'FLOAT')
+    # Real junction distance (docs/PLAN.md 0.6.0): distance to the nearest point
+    # where 3+ road edges meet, not merely to the drawn curve's own endpoint — the
+    # 0.5 proxy used tc_u distance-to-endpoint; same attribute, new algorithm, per
+    # the plan's own note that only the source should change, not the interface.
+    pos=g.node('GeometryNodeInputPosition').outputs[0]
+    prox=g.node('GeometryNodeProximity','Distance to nearest junction',target_element='POINTS')
+    g.put(junction_points,prox.inputs['Geometry']);g.put(pos,prox.inputs['Sample Position'])
+    junction_dist=g.node('GeometryNodeSwitch','No junction nearby fallback',input_type='FLOAT')
+    g.put(prox.outputs['Is Valid'],junction_dist.inputs['Switch'])
+    g.put(99999.,junction_dist.inputs['False']);g.put(prox.outputs['Distance'],junction_dist.inputs['True'])
+    resampled=_store(g,resampled,'tc_junction_dist',junction_dist.outputs[0],'FLOAT')
     resampled=_store(g,resampled,'tc_markings',p['Road Markings'],'FLOAT')
-    return resampled,has_curve
+    return resampled,has_curve,junction_points,has_junctions
 
 
 # ----------------------------------------------------------------- 4.2 profile
@@ -192,15 +245,36 @@ def build_profile(g,p):
 
 
 # ------------------------------------------------------- 4.2 surface + ground
-def build_surface(g,p,centerline,road_material_fn):
+def build_surface(g,p,centerline,junction_points,has_junctions,road_material_fn):
     profile,half,outer=build_profile(g,p)
     swept=g.node('GeometryNodeCurveToMesh','Sweep road cross-section')
     g.put(centerline,swept.inputs['Curve']);g.put(profile,swept.inputs['Profile Curve'])
     swept.inputs['Fill Caps'].default_value=True
+
+    # 0.6: fill each junction with a flat asphalt-height disc, then self-union the
+    # whole thing so multiple streets (and their disjoint per-spline sweeps, see
+    # find_junctions) join into one continuous surface instead of raw overlapping
+    # tube solids (docs/PLAN.md 0.6.0: "路面聯集讓多條街自然接合").
+    fillet_radius=g.math('ADD',outer,.5)
+    cylinder=g.node('GeometryNodeMeshCylinder','Junction fillet disc')
+    g.put(fillet_radius,cylinder.inputs['Radius']);g.put(p['Road Thickness'],cylinder.inputs['Depth'])
+    cylinder_geo=_transform(g,cylinder.outputs['Mesh'],translation=g.vector(0,0,g.math('MULTIPLY',p['Road Thickness'],-.5)))
+    fillets=g.node('GeometryNodeInstanceOnPoints','Fillets at junctions')
+    g.put(junction_points,fillets.inputs['Points']);g.put(cylinder_geo,fillets.inputs['Instance'])
+    fillets_realized=g.node('GeometryNodeRealizeInstances');g.put(fillets.outputs['Instances'],fillets_realized.inputs['Geometry'])
+    merged_candidate=_self_union(g,_join(g,[swept.outputs[0],fillets_realized.outputs[0]]),'Union streets + junction fillets')
+    # No junctions (the common single-street case): skip the extra EXACT boolean
+    # entirely rather than self-union a single already-clean solid with itself —
+    # keeps 0.5's behavior and performance unchanged when there's nothing to merge.
+    merge_switch=g.node('GeometryNodeSwitch','Skip union when there are no junctions',input_type='GEOMETRY')
+    g.put(has_junctions,merge_switch.inputs['Switch'])
+    g.put(swept.outputs[0],merge_switch.inputs['False']);g.put(merged_candidate,merge_switch.inputs['True'])
+    merged=merge_switch.outputs[0]
+
     clip_bottom=g.math('MULTIPLY',p['Road Thickness'],-1)
     clip_top=g.math('ADD',p['Curb Height'],1)
     clip_volume=_region_prism(g,p,clip_bottom,clip_top,'Road clip volume')
-    clipped=_boolean_op(g,swept.outputs[0],clip_volume,'INTERSECT','Clip road to region')
+    clipped=_boolean_op(g,merged,clip_volume,'INTERSECT','Clip road to region')
     normal=g.node('GeometryNodeInputNormal',"Face normal");sep=g.node('ShaderNodeSeparateXYZ');g.put(normal.outputs[0],sep.inputs[0])
     flat=g.math('GREATER_THAN',sep.outputs['Z'],.9)
     # Classify by distance-to-centerline recomputed fresh from the face's own
@@ -217,7 +291,12 @@ def build_surface(g,p,centerline,road_material_fn):
     face_pos=g.node('GeometryNodeInputPosition').outputs[0]
     prox=g.node('GeometryNodeProximity','Distance to centerline',target_element='POINTS')
     g.put(centerline_pts.outputs['Points'],prox.inputs['Geometry']);g.put(face_pos,prox.inputs['Sample Position'])
-    is_sidewalk=g.boolean('AND',flat,g.math('GREATER_THAN',prox.outputs['Distance'],g.math('ADD',half,.01)))
+    # 0.6: suppress the sidewalk/curb classification within the fillet radius of a
+    # junction ("路口附近抑制人行道") — that area becomes flush asphalt instead.
+    prox_junction=g.node('GeometryNodeProximity','Distance to nearest junction (face)',target_element='POINTS')
+    g.put(junction_points,prox_junction.inputs['Geometry']);g.put(face_pos,prox_junction.inputs['Sample Position'])
+    near_junction=g.boolean('AND',prox_junction.outputs['Is Valid'],g.math('LESS_THAN',prox_junction.outputs['Distance'],fillet_radius))
+    is_sidewalk=g.boolean('AND',g.boolean('AND',flat,g.math('GREATER_THAN',prox.outputs['Distance'],g.math('ADD',half,.01))),g.boolean('NOT',near_junction))
     is_asphalt=g.boolean('AND',flat,g.boolean('NOT',is_sidewalk))
     asphalt_sep=g.node('GeometryNodeSeparateGeometry','Asphalt faces',domain='FACE')
     g.put(clipped,asphalt_sep.inputs['Geometry']);g.put(is_asphalt,asphalt_sep.inputs['Selection'])
@@ -521,14 +600,14 @@ def _furniture_side(g,p,region_geo,boundary_sel,centerline,height,side):
 
 
 # ------------------------------------------------------------------ 4.6 wires
-def build_wires(g,p,region_geo,boundary_sel,centerline):
+def build_wires(g,p,region_geo,boundary_sel,centerline,junction_points):
     results=[]
     for side in (1,-1):
-        results+=_wires_side(g,p,region_geo,boundary_sel,centerline,side)
+        results+=_wires_side(g,p,region_geo,boundary_sel,centerline,side,junction_points)
     return results
 
 
-def _wires_side(g,p,region_geo,boundary_sel,centerline,side):
+def _wires_side(g,p,region_geo,boundary_sel,centerline,side,junction_points):
     half=g.math('MULTIPLY',p['Road Width'],.5)
     outer=g.math('ADD',half,p['Sidewalk Width'])
     pole_offset=g.math('ADD',outer,.6)
@@ -556,6 +635,15 @@ def _wires_side(g,p,region_geo,boundary_sel,centerline,side):
     valid=_inside(g,p,region_geo,boundary_sel,pos_field,.93)
     next_valid=_inside(g,p,region_geo,boundary_sel,sample_pos.outputs['Value'],.93)
     connected=g.boolean('AND',valid,g.boolean('AND',next_offset.outputs['Is Valid Offset'],next_valid))
+    # 0.6: interrupt any span whose midpoint falls within a junction's fillet
+    # radius (docs/PLAN.md 0.6.0 "架空線在路口中斷"), reusing build_surface's
+    # own fillet_radius formula (outer + .5).
+    midpoint=_scale(g,g.vmath('ADD',pos_field,sample_pos.outputs['Value']),.5)
+    prox_junction=g.node('GeometryNodeProximity',f'Span clear of junction {side:+d}',target_element='POINTS')
+    g.put(junction_points,prox_junction.inputs['Geometry']);g.put(midpoint,prox_junction.inputs['Sample Position'])
+    fillet_radius=g.math('ADD',outer,.5)
+    crosses_junction=g.boolean('AND',prox_junction.outputs['Is Valid'],g.math('LESS_THAN',prox_junction.outputs['Distance'],fillet_radius))
+    connected=g.boolean('AND',connected,g.boolean('NOT',crosses_junction))
     spanpts=g.node('GeometryNodeCurveToPoints',f'Wire span anchors {side:+d}',mode='EVALUATED')
     tagged=_store(g,moved.outputs[0],'tc_chord',chord,'FLOAT_VECTOR')
     tagged=_store(g,tagged,'tc_chord_len',chord_length.outputs['Value'],'FLOAT')
@@ -589,9 +677,9 @@ def _wires_side(g,p,region_geo,boundary_sel,centerline,side):
 # ------------------------------------------------------------------ orchestrator
 def curve_district(g,p,cols,region_geo,road_mesh_geo,boundary_sel,road_material_fn):
     """Entry point for the whole curved-road branch. Returns (geometry, has_curve)."""
-    centerline,has_curve=build_centerline(g,p,region_geo,road_mesh_geo)
-    surface,half,outer=build_surface(g,p,centerline,road_material_fn)
+    centerline,has_curve,junction_points,has_junctions=build_centerline(g,p,region_geo,road_mesh_geo)
+    surface,half,outer=build_surface(g,p,centerline,junction_points,has_junctions,road_material_fn)
     sites=build_sites(g,p,cols,region_geo,boundary_sel,centerline)
     furniture=build_furniture(g,p,region_geo,boundary_sel,centerline)
-    wires=build_wires(g,p,region_geo,boundary_sel,centerline)
+    wires=build_wires(g,p,region_geo,boundary_sel,centerline,junction_points)
     return _join(g,surface+sites+furniture+wires,'Curved district layers'),has_curve

@@ -3,7 +3,7 @@ import math
 import bpy
 from .assets import PREFIX, ensure_assets, material
 
-GROUP_NAME = 'TCity • Taiwan District v0.5'
+GROUP_NAME = 'TCity • Taiwan District v0.6'
 
 
 class Graph:

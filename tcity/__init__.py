@@ -2,7 +2,7 @@
 bl_info = {
     'name': 'TCity — Taiwan Districts',
     'author': 'TCity contributors',
-    'version': (0,5,0),
+    'version': (0,6,0),
     'blender': (5,2,0),
     'location': 'View3D > Sidebar > TCity',
     'description': 'Generate Taiwanese mixed-use streets from a filled planar region',
@@ -110,8 +110,8 @@ class TCITY_OT_seed(bpy.types.Operator):
 
 
 class TCITY_OT_upgrade(bpy.types.Operator):
-    bl_idname='tcity.upgrade';bl_label='Upgrade District to 0.5';bl_options={'REGISTER','UNDO'}
-    bl_description='保留區域和既有控制值，升級道路曲線與沿街設施（原節點樹仍保留）'
+    bl_idname='tcity.upgrade';bl_label='Upgrade District to 0.6';bl_options={'REGISTER','UNDO'}
+    bl_description='保留區域和既有控制值，升級路口與沿街設施（原節點樹仍保留）'
     def execute(self,context):
         mod=district_modifier(context.active_object)
         if not mod:return {'CANCELLED'}
@@ -191,7 +191,7 @@ class TCITY_PT_panel(bpy.types.Panel):
     bl_space_type='VIEW_3D';bl_region_type='UI';bl_category='TCity'
     def draw(self,context):
         layout=self.layout
-        layout.label(text='TAIWAN STREETS / 0.5',icon='MOD_NODES')
+        layout.label(text='TAIWAN STREETS / 0.6',icon='MOD_NODES')
         layout.operator('tcity.add_demo',text='新增範例街區',icon='ADD')
         layout.operator('tcity.generate',text='從選取區域生成',icon='MESH_GRID')
         mod=district_modifier(context.active_object)
