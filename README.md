@@ -2,11 +2,17 @@
 
 在 Blender 中，將一塊已填面的區域轉為台灣住商混合街區。使用 **Geometry Nodes** 即時生成配置，附原創磁磚街屋、公寓、騎樓、陽台鐵窗、冷氣外機、繁體中文招牌、住宅頂加、水塔、曬衣與盆栽。
 
-**版本：0.6.3，已實測 Blender 5.2.1 LTS。** 這是可使用、可繼續開發的原型，並非 iCity 官方產品或完整功能替代品。場景偏向中景與街區預覽；還不是近距離寫實建築資產庫。
+**版本：0.6.4，已實測 Blender 5.2.1 LTS。** 這是可使用、可繼續開發的原型，並非 iCity 官方產品或完整功能替代品。場景偏向中景與街區預覽；還不是近距離寫實建築資產庫。
 
 ![道路與沿街設施實際渲染](renders/streets_closeup.png)
 
 ![電信箱與人行道細節](renders/utilities_detail.png)
+
+## 0.6.4：台灣新式住宅社區
+
+依建商完工照與社區街景新增獨立的 **Geometry Nodes 住宅社區生成器**：單棟、雙棟、弧邊大陽台住宅，6–24 層實際樓層組合、內縮門窗、設備遮屏、屋突、入口和共用庭園。道路、人行道、排水與電信箱隨社區尺度配置；完整基地碰到凹角或孔洞時整組略過。
+
+直接開啟 [新式社區範例](dist/TCity_Modern_Communities.blend)，或安裝後用 `N → TCity → 新式住宅社區`。見 [操作說明](docs/modern-communities.md) 與 [真實照片／模型對照](docs/research/modern-residential.md)。新式社區目前是獨立生成器，尚未自動混排舊街屋或沿手繪曲線配置。
 
 ## 0.6.3：轉角雙立面建築
 
@@ -68,7 +74,7 @@
 ## 安裝外掛
 
 1. Blender → **Edit → Preferences → Get Extensions**，右上角選單選 **Install from Disk**。
-2. 選擇 [`dist/tcity-0.6.3.zip`](dist/tcity-0.6.3.zip)，安裝並啟用。
+2. 選擇 [`dist/tcity-0.6.4.zip`](dist/tcity-0.6.4.zip)，安裝並啟用。
 3. 在 3D View 按 `N` → **TCity** → **新增範例街區**。
 
 ZIP 包含程式碼、招牌中文字型子集與 CC0 照明 HDRI，不需要下載模型、貼圖或額外安裝 Python 套件。第一次生成會建立 54 組建築變體（36 組街屋、6 組鐵皮屋、12 組轉角雙立面）；同一檔案後續區域共用資產，參數各自獨立。另有四個沿街資產：電桿、電信箱、人孔蓋、排水格柵；線纜由 GN 直接產生。
@@ -148,7 +154,7 @@ Python 只建立原創資產、節點樹與 UI；**修改參數與區域時，�
 ## 現階段範圍
 
 - 正交雙排街廓；輸入為平面。尚無曲線道路、坡地貼合、OSM / 真實地籍或使用者道路曲線。
-- 54 組原創建築組合（6 種立面 × 2–7 樓，加上 6 種單層鐵皮屋與 12 組簡化轉角雙立面），不是掃描資產。轉角雙立面僅用於曲線道路的近似直角路口，且是既有立面拼接而非專用模型；尚無廟宇、夜市攤位或高樓。
+- 54 組原創建築組合（6 種立面 × 2–7 樓，加上 6 種單層鐵皮屋與 12 組簡化轉角雙立面），不是掃描資產。轉角雙立面僅用於曲線道路的近似直角路口，且是既有立面拼接而非專用模型；尚無廟宇、夜市攤位；高樓使用上述獨立新式社區生成器。
 - 道路標線是展示用程序化材質，並非交通工程配置；不含交通動畫、路線導航或正式道路網路資料。
 - 空置基地保留鋪面平台，尚未自動生成公園或停車場。
 - 建議先使用 100–200 m 的區域。新增區域時邊長上限 1,000 m；GN 安全上限為 20,000 個候選基地。建立後若把網格拉得更大，可能觸及此上限。
@@ -161,11 +167,13 @@ Python 只建立原創資產、節點樹與 UI；**修改參數與區域時，�
 blender -b --factory-startup --python-exit-code 1 --python scripts/build_demo.py -- --render
 blender -b --factory-startup --python-exit-code 1 --python tests/test_blender.py
 blender -b --factory-startup --python-exit-code 1 --python tests/test_infrastructure.py
+blender -b --factory-startup --python-exit-code 1 --python tests/test_modern.py
+blender -b --factory-startup --python-exit-code 1 --python tests/test_modern_demo.py
 blender -b --factory-startup --python-exit-code 1 --python tests/test_package.py
 blender -b --factory-startup --python-exit-code 1 --python tests/test_upgrade.py
 blender -b --factory-startup --python-exit-code 1 --python tests/test_demo.py
 blender --command extension build --source-dir tcity --output-dir dist
-blender --command extension validate dist/tcity-0.6.3.zip
+blender --command extension validate dist/tcity-0.6.4.zip
 ```
 
 主要檔案：`tcity/residential.py` 台北住宅與頂加、`tcity/surfaces.py` 程序材質、`tcity/lived_in.py` 生活細節、`tcity/assets.py` 資產共用工具、`tcity/infrastructure.py` 道路與連線節點、`tcity/street_assets.py` 沿街資產、`tcity/nodes.py` 主節點建構、`tcity/__init__.py` 外掛 UI / 操作、`scripts/build_demo.py` 展示場景、`tests/test_blender.py` 實機整合測試。

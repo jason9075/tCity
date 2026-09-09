@@ -65,3 +65,9 @@ N 側欄 → TCity → 台灣農地。新增農地範例或由已填面 XY 區�
 - 過程中同時修正兩個既有問題：`Bend Buildings to Curve` 關閉時，街屋朝向會塌回單一方向（`align` 節點吃到的是曲線域轉換後失效的 Tangent field，改讀已存的 `tc_site_normal`/`tc_site_tangent` 屬性）；以及路口分裂道路曲線時，`Resample Curve` 對兩段曲線各自強制取端點，導致同一個轉角基地重複出現兩次（加了 `Merge By Distance` 去重)。
 
 詳細設計見 [`docs/PLAN.md`](../docs/PLAN.md) 與 [`docs/roadmap.md`](../docs/roadmap.md)。
+
+## 0.6.4 · 台灣新式住宅社區
+
+N → TCity → 新式住宅社區。新增範例或由純面 XY 區域生成單棟、雙棟及弧邊大陽台住宅，包含入口、庭院、樹池、屋頂設備與沿街設施。主要塔樓 6–24 層，一樓 4.5 m、上層 3.1 m，雙棟副棟可低兩層。Community Width / Depth 縮放整組 XY 尺寸；不拉伸樓高。
+
+完整基地若碰到邊界或孔洞就整組略過；Density 控制基地密度，Buildings 關閉仍保留道路，Landscape 單獨控制庭園樹木。最多 400 個候選基地。此生成器採自動正交道路，尚未與舊街屋自動混排或沿手繪道路配置。原創幾何依建商完工照與社區街景研究，照片不包含於 ZIP；仍是程序化原型，非照片級資產庫。
