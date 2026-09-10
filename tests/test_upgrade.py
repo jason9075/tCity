@@ -28,7 +28,12 @@ for version in ('0.1','0.2','0.3'):
     items=[i.object.original for i in dg.object_instances if i.is_instance and i.parent and i.parent.original==obj]
     assert items and all(o.get('tc_kind')=='METAL_SHED' for o in items if o.name.startswith('TC_') and not o.name.startswith('TC_INF_'))
     assert not any('_Signs_' in o.name or '_Additions_' in o.name for o in items)
-    assert len([c for c in bpy.data.collections if c.name.startswith('TCity • Buildings')])==(1 if version=='0.3' else 2)
+    # v0.3 scenes used to reuse their embedded kit outright (same name, same
+    # kit_version) instead of regenerating a second collection; 0.6.3's corner
+    # buildings bumped KIT_VERSION, so that embedded 42-object kit is now
+    # stale too and every archived version regenerates a fresh 54-object one
+    # alongside it.
+    assert len([c for c in bpy.data.collections if c.name.startswith('TCity • Buildings')])==2
     reports.append({'result':'PASS','from':version,'to':'0.4','preserved_controls':list(values),
                     'boundary_unchanged':True,'old_kit_preserved':True,'roof_control':get_control(mod,'Rooftop Addition Mix'),'new_instances':len(items)})
 (ROOT/'dist/upgrade_test_results.json').write_text(json.dumps(reports,indent=2))

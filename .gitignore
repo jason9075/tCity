@@ -17,3 +17,6 @@ renders/*
 
 # 未被文件引用的大圖
 docs/research/v02_before.png
+
+# `just package-assets` 輸出（dist/ 的搬機用打包檔，見 Justfile）
+assets-archive/

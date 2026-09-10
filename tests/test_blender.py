@@ -97,11 +97,14 @@ def run():
     assert additions()=={matrix for name,matrix in snapshot(obj,'Buildings')}
     assert snapshot(obj,'Roofs')==core
     record('Roof home proportion','0/30/70/100 percent is monotonic, all residential parcels at 100%; permanent roof services unchanged')
-    from tcity.assets import ensure_assets
+    from tcity.assets import ensure_assets,KIT_OBJECT_COUNT
     cols=ensure_assets()
-    assert len(cols)==5 and all(len(c.objects)==42 for c in cols.values())
+    assert len(cols)==5 and all(len(c.objects)==KIT_OBJECT_COUNT for c in cols.values())
     for key,c in cols.items():
-        assert [int(o.name.split('_')[1]) for o in sorted(c.objects,key=lambda o:o.name)]==list(range(42))
+        assert [int(o.name.split('_')[1]) for o in sorted(c.objects,key=lambda o:o.name)]==list(range(KIT_OBJECT_COUNT))
+    # 0.6.3 corner buildings (42-53): dual-frontage assets for near-right-angle
+    # curved-road junctions, docs/roadmap.md "轉角雙立面模組".
+    assert {int(o.name.split('_')[1]) for o in cols['Buildings'].objects if o.get('tc_kind')=='CORNER'}==set(range(42,54))
     for o in cols['Additions'].objects:
         if o.get('tc_kind')=='ROWHOUSE':
             coords=[v.co for v in o.data.vertices]

@@ -9,7 +9,7 @@ import bpy
 ROOT=Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix='tcity-package-') as directory:
     root=Path(directory)
-    with zipfile.ZipFile(ROOT/'dist'/'tcity-0.4.0.zip') as archive:
+    with zipfile.ZipFile(ROOT/'dist'/'tcity-0.6.4.zip') as archive:
         names=archive.namelist()
         assert 'blender_manifest.toml' in names
         assert 'fonts/TCitySigns.otf' in names
@@ -32,8 +32,24 @@ with tempfile.TemporaryDirectory(prefix='tcity-package-') as directory:
     # Ensure Chinese text became mesh geometry even without external system fonts.
     from tcity.assets import find_font
     assert str(root) in find_font().filepath
-    report={'blender':bpy.app.version_string,'package':'tcity-0.4.0.zip',
+    report={'blender':bpy.app.version_string,'package':'tcity-0.6.4.zip',
             'result':'PASS','instances':count,'bundled_font':True,'isolated_import':True}
+    assert bpy.ops.tcity.add_farmland()=={'FINISHED'}
+    farm=bpy.context.object
+    from tcity.farmland import farmland_modifier
+    assert farmland_modifier(farm)
+    bpy.context.view_layer.update()
+    dg=bpy.context.evaluated_depsgraph_get()
+    sources={i.object.original.name for i in dg.object_instances if i.is_instance and i.parent and i.parent.original==farm}
+    assert any('TC_FARM_' in name for name in sources)
+    assert any('TC_INF_Pole' in name for name in sources)
+    report['farmland']=True
+    assert bpy.ops.tcity.add_modern()=={'FINISHED'}
+    modern=bpy.context.object
+    bpy.context.view_layer.update();dg=bpy.context.evaluated_depsgraph_get()
+    modern_count=sum(1 for i in dg.object_instances if i.is_instance and i.parent and i.parent.original==modern and i.object.original.get('tc_modern_role')=='Base')
+    assert modern_count>0
+    report['modern_communities']=modern_count
     tcity.unregister()
     (ROOT/'dist'/'package_test_results.json').write_text(json.dumps(report,indent=2))
     print('TCITY_PACKAGE_PASS',json.dumps(report),flush=True)

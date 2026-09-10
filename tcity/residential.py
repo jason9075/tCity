@@ -99,107 +99,158 @@ def roof_home(b,h,variant,p):
         sloped_roof(b,.88,2.43,2.55,3.88,h+1.40,h+1.63,p['roof'][(variant+3)%6],p['steel'])
 
 
+def _facade(floors,variant,p,mats,font):
+    """One single-frontage rowhouse (body, signs, roof, props, addition), front
+    facade facing local -Y. Pulled out of build_residential so build_corner can
+    reuse it twice per corner asset (docs/roadmap.md "轉角雙立面模組")."""
+    rng=random.Random(5400+floors*61+variant)
+    body,signs,roof,props,addition=(MeshBuilder() for _ in range(5))
+    wall=p['walls'][variant];h=3.25+(floors-1)*2.95
+    # Deep dark rooms behind a genuine recessed balcony zone.
+    body.box((0,0,.09),(6.36,12,.18),p['concrete'])
+    body.box((0,1.90,h/2),(6.12,7.9,h),wall)
+    for x in (-3.01,3.01):body.box((x,-.23,h/2),(.16,11.80,h),wall)
+    body.box((0,-.30,3.20),(6.20,11.3,.18),p['concrete'])
+    # Ground-floor apartment entrance and adjacent recessed shop/garage.
+    for x in (-2.92,2.92):body.box((x,-5.28,1.62),(.29,.31,3.07),wall)
+    body.box((2.10,-3.52,1.29),(1.35,.16,2.37),p['steel'])
+    window(body,2.10,-3.63,1.73,1.09,.70,p,rng)
+    for j in range(5):
+        body.box((1.20,-3.62,.72+j*.28),(.26,.055,.21),p['frame'])
+        body.box((1.20,-3.654,.76+j*.28),(.19,.012,.016),p['interior'])
+    body.box((2.88,-3.70,1.50),(.14,.07,.28),p['frame'])
+    shop_y=-3.70
+    if variant in (0,3,5):
+        # Some shutters half-open, revealing a dark shop with a simple counter.
+        body.box((-.80,-3.14,1.35),(3.85,.08,2.7),p['interior'])
+        shutter_low=1.15 if variant==0 else .23
+        for j in range(int((2.85-shutter_low)/.075)):
+            body.box((-.80,shop_y,shutter_low+j*.075),(3.88,.08,.059),p['steel'])
+        if variant==0:body.box((-.80,-3.20,.48),(2.1,.55,.8),p['repair'])
+        signs.box((-.67,-5.36,2.88),(4.22,.16,.56),mats['white'])
+        signs.text(['永和豆漿','金興五金','日日茶行'][variant//2 if variant<5 else 2],(-.67,-5.46,2.89),.38,mats['blue'],font)
+        # Faded sagging canvas strips on a lean metal frame.
+        sheet(signs,(-2.8,-5.89,2.34),(4.27,0,0),(0,.69,.27),p['roof'][variant],pitch=.27,amplitude=.015)
+        if variant==3:
+            signs.box((2.76,-5.50,5.04),(.47,.24,2.08),mats['white'])
+            for j,ch in enumerate('五金'):signs.text(ch,(2.76,-5.635,5.55-j*.64),.40,mats['red'],font)
+    else:
+        for x in (-1.72,.05):window(body,x,-3.69,1.45,1.58,2.52,p,rng)
+    # Per-household alterations, rather than one repeated window module.
+    for floor in range(1,floors):
+        z=3.25+(floor-1)*2.95
+        body.box((0,-.1,z),(6.25,11.25,.16),p['concrete'])
+        body.box((0,-5.57,z+.04),(5.96,.57,.16),p['concrete'])
+        body.box((0,-4.07,z+.37),(5.85,.17,.70),wall)
+        body.box((0,-4.07,z+2.72),(5.85,.17,.38),wall)
+        for x in (-2.92,0,2.92):body.box((x,-4.07,z+1.52),(.20,.17,1.66),wall)
+        for bay,x in enumerate((-1.43,1.43)):
+            window(body,x,-4.18,z+1.54,2.58,1.77,p,rng)
+            enclosure=rng.random()
+            front=-5.48-rng.uniform(0,.14)
+            if enclosure<.72:
+                # Low tiled balcony wall topped with varied iron cages.
+                body.box((x,front+.04,z+.43),(2.72,.15,.66),wall if enclosure<.43 else p['repair'])
+                grille(body,x,front-.065,z+.81,2.62,1.84,p,variant+floor+bay)
+                if enclosure<.2:window(body,x,front+.02,z+1.63,2.40,1.53,p,rng)
+            else:
+                grille(body,x,front,z+.23,2.62,1.00,p,variant+bay)
+            # A few replaced awnings and side windbreak panels.
+            if rng.random()<.65:
+                sheet(body,(x-1.34,front-.16,z+2.58),(2.68,0,0),(0,.82,.14),p['roof'][(variant+floor+bay)%6],pitch=.20,amplitude=.012)
+                rod(body,(x-1.27,front,z+2.50),(x-1.27,-4.4,z+2.66),.012,p['steel'])
+            if rng.random()<.74:
+                aircon(body,x+rng.uniform(-.7,.6),front-.03,z+.34 if enclosure>.4 else z+2.60,p,floor*6+variant+bay)
+            if rng.random()<.65:plant(body,(x+.65,front+.37,z+.2),.55,p,100*floor+variant+bay)
+            if rng.random()<.40:laundry(body,x,front+.42,z+2.05,1.72,p,floor*37+bay+variant)
+        # Stairwell/rear windows, drain stacks and poorly matched repairs.
+        for x in (-1.55,1.65):
+            window(body,x,5.86,z+1.41,1.0,1.2,p,rng)
+        for side in (-1,1):
+            for yy in (0.0,3.9):
+                body.box((side*3.10,yy,z+1.5),(.03,.94,1.15),p['glass'])
+                for j in range(4):body.box((side*3.13,yy-.35+j*.23,z+1.5),(.02,.025,1.12),p['frame'])
+        if floor%2==variant%2:
+            body.box((2.82,-4.12,z+1.3),(.15,.022,1.73),p['repair'])
+    for x,y in ((2.82,-5.25),(-2.85,5.72)):
+        cable(body,[(x,y,.3),(x,y,h-.4),(x-.25,y,h-.2)],.041,p['plastic'])
+        for z in range(1,int(h),2):ring(body,(x,y,z),.059,.010,p['steel'],axis='Z',segments=12)
+    # Loose electric loops and telecom junction boxes under the arcade.
+    for j in range(3):
+        points=[(-2.9+5.8*t/12,-5.34,3.04-.23*math.sin(t*math.pi/12)-j*.075) for t in range(13)]
+        cable(body,points,.010,p['rubber'])
+    body.box((-2.58,-5.4,2.47),(.32,.18,.40),p['plastic'])
+    # Roof slab, parapets, permanently present stair access and service tanks.
+    body.box((0,.1,h+.08),(6.25,11.6,.20),p['concrete'])
+    for x in (-3.02,3.02):body.box((x,.1,h+.56),(.16,11.56,.95),wall)
+    for y in (-5.6,5.8):body.box((0,y,h+.56),(6.06,.16,.95),wall)
+    roof.box((-1.55,4.58,h+1.27),(2.35,2.24,2.34),p['plaster'])
+    roof.box((-1.55,4.58,h+2.50),(2.51,2.4,.16),p['concrete'])
+    roof.box((-1.62,3.42,h+1.2),(.91,.10,2.10),p['steel'])
+    for j,(xx,r) in enumerate(((-2.06,.46),(-.92,.51))):water_tank(roof,xx,4.7,h+2.60,r,p)
+    if variant%2:water_tank(roof,1.72,4.67,h+.22,.57,p)
+    # Accessible terrace rails, ladder and scattered roof plants.
+    for x in (2.3,2.67):rod(roof,(x,5.41,h+.2),(x,5.41,h+1.9),.018,p['silver'])
+    for j in range(6):rod(roof,(2.3,5.41,h+.3+j*.28),(2.67,5.41,h+.3+j*.28),.014,p['silver'])
+    plant(roof,(1.0,4.7,h+.19),.85,p,variant+500)
+    roof_home(addition,h,variant,p)
+    # Scatter individually shaped plants and a narrow utility cart at ground level.
+    for j,(x,y) in enumerate(((-2.42,-4.35),(2.52,-4.33))):plant(props,(x,y,.18),.72,p,variant*32+j)
+    props.box((.7,-4.2,.57),(.37,.43,.76),p['plastic'])
+    for j in range(3):props.box((.7,-4.44,.38+j*.23),(.31,.03,.16),p['frame'])
+    return body,signs,roof,props,addition
+
+
 def build_residential(cols,mats,font):
     p=palette()
     for floors in range(2,8):
         for variant in range(6):
-            rng=random.Random(5400+floors*61+variant)
-            body,signs,roof,props,addition=(MeshBuilder() for _ in range(5))
-            wall=p['walls'][variant];h=3.25+(floors-1)*2.95
-            # Deep dark rooms behind a genuine recessed balcony zone.
-            body.box((0,0,.09),(6.36,12,.18),p['concrete'])
-            body.box((0,1.90,h/2),(6.12,7.9,h),wall)
-            for x in (-3.01,3.01):body.box((x,-.23,h/2),(.16,11.80,h),wall)
-            body.box((0,-.30,3.20),(6.20,11.3,.18),p['concrete'])
-            # Ground-floor apartment entrance and adjacent recessed shop/garage.
-            for x in (-2.92,2.92):body.box((x,-5.28,1.62),(.29,.31,3.07),wall)
-            body.box((2.10,-3.52,1.29),(1.35,.16,2.37),p['steel'])
-            window(body,2.10,-3.63,1.73,1.09,.70,p,rng)
-            for j in range(5):
-                body.box((1.20,-3.62,.72+j*.28),(.26,.055,.21),p['frame'])
-                body.box((1.20,-3.654,.76+j*.28),(.19,.012,.016),p['interior'])
-            body.box((2.88,-3.70,1.50),(.14,.07,.28),p['frame'])
-            shop_y=-3.70
-            if variant in (0,3,5):
-                # Some shutters half-open, revealing a dark shop with a simple counter.
-                body.box((-.80,-3.14,1.35),(3.85,.08,2.7),p['interior'])
-                shutter_low=1.15 if variant==0 else .23
-                for j in range(int((2.85-shutter_low)/.075)):
-                    body.box((-.80,shop_y,shutter_low+j*.075),(3.88,.08,.059),p['steel'])
-                if variant==0:body.box((-.80,-3.20,.48),(2.1,.55,.8),p['repair'])
-                signs.box((-.67,-5.36,2.88),(4.22,.16,.56),mats['white'])
-                signs.text(['永和豆漿','金興五金','日日茶行'][variant//2 if variant<5 else 2],(-.67,-5.46,2.89),.38,mats['blue'],font)
-                # Faded sagging canvas strips on a lean metal frame.
-                sheet(signs,(-2.8,-5.89,2.34),(4.27,0,0),(0,.69,.27),p['roof'][variant],pitch=.27,amplitude=.015)
-                if variant==3:
-                    signs.box((2.76,-5.50,5.04),(.47,.24,2.08),mats['white'])
-                    for j,ch in enumerate('五金'):signs.text(ch,(2.76,-5.635,5.55-j*.64),.40,mats['red'],font)
-            else:
-                for x in (-1.72,.05):window(body,x,-3.69,1.45,1.58,2.52,p,rng)
-            # Per-household alterations, rather than one repeated window module.
-            for floor in range(1,floors):
-                z=3.25+(floor-1)*2.95
-                body.box((0,-.1,z),(6.25,11.25,.16),p['concrete'])
-                body.box((0,-5.57,z+.04),(5.96,.57,.16),p['concrete'])
-                body.box((0,-4.07,z+.37),(5.85,.17,.70),wall)
-                body.box((0,-4.07,z+2.72),(5.85,.17,.38),wall)
-                for x in (-2.92,0,2.92):body.box((x,-4.07,z+1.52),(.20,.17,1.66),wall)
-                for bay,x in enumerate((-1.43,1.43)):
-                    window(body,x,-4.18,z+1.54,2.58,1.77,p,rng)
-                    enclosure=rng.random()
-                    front=-5.48-rng.uniform(0,.14)
-                    if enclosure<.72:
-                        # Low tiled balcony wall topped with varied iron cages.
-                        body.box((x,front+.04,z+.43),(2.72,.15,.66),wall if enclosure<.43 else p['repair'])
-                        grille(body,x,front-.065,z+.81,2.62,1.84,p,variant+floor+bay)
-                        if enclosure<.2:window(body,x,front+.02,z+1.63,2.40,1.53,p,rng)
-                    else:
-                        grille(body,x,front,z+.23,2.62,1.00,p,variant+bay)
-                    # A few replaced awnings and side windbreak panels.
-                    if rng.random()<.65:
-                        sheet(body,(x-1.34,front-.16,z+2.58),(2.68,0,0),(0,.82,.14),p['roof'][(variant+floor+bay)%6],pitch=.20,amplitude=.012)
-                        rod(body,(x-1.27,front,z+2.50),(x-1.27,-4.4,z+2.66),.012,p['steel'])
-                    if rng.random()<.74:
-                        aircon(body,x+rng.uniform(-.7,.6),front-.03,z+.34 if enclosure>.4 else z+2.60,p,floor*6+variant+bay)
-                    if rng.random()<.65:plant(body,(x+.65,front+.37,z+.2),.55,p,100*floor+variant+bay)
-                    if rng.random()<.40:laundry(body,x,front+.42,z+2.05,1.72,p,floor*37+bay+variant)
-                # Stairwell/rear windows, drain stacks and poorly matched repairs.
-                for x in (-1.55,1.65):
-                    window(body,x,5.86,z+1.41,1.0,1.2,p,rng)
-                for side in (-1,1):
-                    for yy in (0.0,3.9):
-                        body.box((side*3.10,yy,z+1.5),(.03,.94,1.15),p['glass'])
-                        for j in range(4):body.box((side*3.13,yy-.35+j*.23,z+1.5),(.02,.025,1.12),p['frame'])
-                if floor%2==variant%2:
-                    body.box((2.82,-4.12,z+1.3),(.15,.022,1.73),p['repair'])
-            for x,y in ((2.82,-5.25),(-2.85,5.72)):
-                cable(body,[(x,y,.3),(x,y,h-.4),(x-.25,y,h-.2)],.041,p['plastic'])
-                for z in range(1,int(h),2):ring(body,(x,y,z),.059,.010,p['steel'],axis='Z',segments=12)
-            # Loose electric loops and telecom junction boxes under the arcade.
-            for j in range(3):
-                points=[(-2.9+5.8*t/12,-5.34,3.04-.23*math.sin(t*math.pi/12)-j*.075) for t in range(13)]
-                cable(body,points,.010,p['rubber'])
-            body.box((-2.58,-5.4,2.47),(.32,.18,.40),p['plastic'])
-            # Roof slab, parapets, permanently present stair access and service tanks.
-            body.box((0,.1,h+.08),(6.25,11.6,.20),p['concrete'])
-            for x in (-3.02,3.02):body.box((x,.1,h+.56),(.16,11.56,.95),wall)
-            for y in (-5.6,5.8):body.box((0,y,h+.56),(6.06,.16,.95),wall)
-            roof.box((-1.55,4.58,h+1.27),(2.35,2.24,2.34),p['plaster'])
-            roof.box((-1.55,4.58,h+2.50),(2.51,2.4,.16),p['concrete'])
-            roof.box((-1.62,3.42,h+1.2),(.91,.10,2.10),p['steel'])
-            for j,(xx,r) in enumerate(((-2.06,.46),(-.92,.51))):water_tank(roof,xx,4.7,h+2.60,r,p)
-            if variant%2:water_tank(roof,1.72,4.67,h+.22,.57,p)
-            # Accessible terrace rails, ladder and scattered roof plants.
-            for x in (2.3,2.67):rod(roof,(x,5.41,h+.2),(x,5.41,h+1.9),.018,p['silver'])
-            for j in range(6):rod(roof,(2.3,5.41,h+.3+j*.28),(2.67,5.41,h+.3+j*.28),.014,p['silver'])
-            plant(roof,(1.0,4.7,h+.19),.85,p,variant+500)
-            roof_home(addition,h,variant,p)
-            # Scatter individually shaped plants and a narrow utility cart at ground level.
-            for j,(x,y) in enumerate(((-2.42,-4.35),(2.52,-4.33))):plant(props,(x,y,.18),.72,p,variant*32+j)
-            props.box((.7,-4.2,.57),(.37,.43,.76),p['plastic'])
-            for j in range(3):props.box((.7,-4.44,.38+j*.23),(.31,.03,.16),p['frame'])
+            body,signs,roof,props,addition=_facade(floors,variant,p,mats,font)
             index=(floors-2)*6+variant
             for key,builder in zip(cols,(body,signs,roof,props,addition)):
                 obj=builder.object(f'TC_{index:02d}_{key}_{floors}F_{variant}',cols[key])
                 obj['tc_floors']=floors;obj['tc_variant']=variant;obj['tc_kind']='ROWHOUSE'
+                obj['tc_roof_home']=key=='Additions'
+
+
+# Footprint constants shared with every _facade() rowhouse (see the ground/roof
+# slabs above): half the 6.36 m frontage width, and the ~12 m depth's front edge.
+_CORNER_HALF=3.18
+_CORNER_FRONT=-6.0
+
+
+def build_corner(cols,mats,font):
+    """Dual-frontage corner buildings for near-right-angle road junctions
+    (docs/roadmap.md "轉角雙立面模組"; simplified per the 0.6.3 scope decision:
+    two existing single-frontage facades joined by a rounded tile corner pier,
+    rather than a dedicated corner-only model).
+
+    Each combines wing A (an ordinary _facade(), left in place) with wing B (a
+    second _facade(), rotated 90° about the shared outer corner so its own front
+    faces sideways) — one variant attaches wing B clockwise, the other counter-
+    clockwise, so roads.py can pick whichever handedness matches the real corner.
+    Indices continue on from the 36 rowhouses + 6 metal sheds already in the kit."""
+    p=palette()
+    keys=('body','signs','roof','props','addition')
+    for floors in range(2,8):
+        for sign in (-1,1):
+            wing_a=dict(zip(keys,_facade(floors,0,p,mats,font)))
+            wing_b=dict(zip(keys,_facade(floors,4,p,mats,font)))
+            h=3.25+(floors-1)*2.95
+            # Rotate wing B so its front (originally -Y) faces sideways (+X for
+            # sign>0, -X for sign<0), then slide it so the two footprints share
+            # the corner point (sign*_CORNER_HALF, _CORNER_FRONT) exactly.
+            dx=sign*(_CORNER_HALF-_CORNER_FRONT); dy=_CORNER_FRONT+_CORNER_HALF
+            rotate=Matrix.Rotation(sign*math.pi/2,4,'Z')
+            place=Matrix.Translation((dx,dy,0))@rotate
+            for key in keys:
+                wing_b[key].transform(place)
+                wing_a[key].extend(wing_b[key])
+            # Rounded tile pier blending the two facades at the shared corner —
+            # mostly buried inside the merged walls, only the outer quarter shows.
+            wing_a['body'].cylinder((sign*_CORNER_HALF,_CORNER_FRONT,(h+1.0)/2),.42,h+1.0,p['walls'][0],10)
+            index=42+(floors-2)*2+(1 if sign>0 else 0)
+            for key,builder in zip(cols,(wing_a[k] for k in keys)):
+                obj=builder.object(f'TC_{index:02d}_{key}_{floors}F_corner{"R" if sign>0 else "L"}',cols[key])
+                obj['tc_floors']=floors;obj['tc_variant']=0;obj['tc_kind']='CORNER'
                 obj['tc_roof_home']=key=='Additions'

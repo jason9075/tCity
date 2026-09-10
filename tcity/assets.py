@@ -12,7 +12,13 @@ import bpy
 from mathutils import Vector, Matrix
 
 PREFIX = "TCity • "
-KIT_VERSION = 3
+KIT_VERSION = 4
+# Indices 0-35 are the 6-floor-count x 6-variant rowhouses, 36-41 the metal sheds
+# (both unchanged from KIT_VERSION 3); 42-53 are the 0.6.3 corner buildings —
+# 6 floor counts x 2 mirror-image handedness, each combining two existing
+# single-frontage facades around a rounded tile corner pier (docs/roadmap.md
+# "轉角雙立面模組"). KIT_OBJECT_COUNT reflects the new total per collection.
+KIT_OBJECT_COUNT = 54
 COLLECTION_NAMES = {k: PREFIX + k + ' v0.3' for k in ("Buildings", "Signs", "Roofs", "Street life", "Additions")}
 
 
@@ -73,6 +79,25 @@ class MeshBuilder:
         self.faces.extend(tuple(offset + i for i in f) for f in faces)
         self.indices.extend([idx] * len(faces))
         self.smooth.extend(smooth if isinstance(smooth,list) else [smooth]*len(faces))
+
+    def transform(self, matrix):
+        """Apply a rigid mathutils Matrix to every vertex in place. Only ever used
+        with pure rotation/translation (no mirroring), so winding stays correct."""
+        self.verts = [tuple(matrix @ Vector(v)) for v in self.verts]
+
+    def extend(self, other):
+        """Merge another builder's geometry into this one (0.6.3 corner buildings:
+        combining two independently authored facades into one asset)."""
+        offset = len(self.verts)
+        remap = []
+        for m in other.materials:
+            if m not in self.materials:
+                self.materials.append(m)
+            remap.append(self.materials.index(m))
+        self.verts.extend(other.verts)
+        self.faces.extend(tuple(offset + i for i in f) for f in other.faces)
+        self.indices.extend(remap[i] for i in other.indices)
+        self.smooth.extend(other.smooth)
 
     def box(self, center, size, mat, rotation=None):
         verts = []
@@ -139,7 +164,7 @@ def find_font():
 
 def ensure_assets():
     existing = {k: bpy.data.collections.get(v) for k,v in COLLECTION_NAMES.items()}
-    if all(c is not None and c.get('tc_kit_version') == KIT_VERSION and len(c.objects) == 42
+    if all(c is not None and c.get('tc_kit_version') == KIT_VERSION and len(c.objects) == KIT_OBJECT_COUNT
            for c in existing.values()):
         return existing
     cols = {k: bpy.data.collections.new(v) for k,v in COLLECTION_NAMES.items()}
@@ -168,8 +193,9 @@ def ensure_assets():
         'brick': material('Red tile', (.43,.19,.12), tile=True),
     }
     font = find_font()
-    from .residential import build_residential
+    from .residential import build_residential, build_corner
     build_residential(cols,mats,font)
     from .sheds import build_sheds
     build_sheds(cols,mats,font)
+    build_corner(cols,mats,font)
     return cols
