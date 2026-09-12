@@ -113,10 +113,12 @@ def run():
     record('Residential kit','Five aligned collections; residential roof homes have full-size rooms and terraces')
     for mix,allowed in [(0,{0,1,2}),(1,{3,4,5})]:
         set_control(mod,'Townhouse Mix',mix)
-        assert {int(n.split('_')[4]) for n,_ in snapshot(obj,'Buildings')}<=allowed
+        rowhouses=[n for n,_ in snapshot(obj,'Buildings') if bpy.data.objects[n].get('tc_kind')=='ROWHOUSE']
+        assert {int(n.split('_')[4]) for n in rowhouses}<=allowed
     record('Facade mix','Facade group 0–2 and facade group 3–5 selections')
     def sheds():
-        return {matrix for name,matrix in snapshot(obj,'Buildings') if int(name.split('_')[1])>=36}
+        return {matrix for name,matrix in snapshot(obj,'Buildings') if bpy.data.objects[name].get('tc_kind')=='METAL_SHED'}
+    set_control(mod,'Corner Buildings',False)
     assert not sheds()
     set_control(mod,'Metal Shed Mix',.3);low=sheds();assert low
     set_control(mod,'Metal Shed Mix',.7);high=sheds();assert low<high
@@ -131,6 +133,7 @@ def run():
     assert snapshot(obj,'Buildings')==all_sheds
     assert all(max(v.co.z for v in bpy.data.objects[name].data.vertices)>4 for name,_ in all_sheds)
     set_control(mod,'Rooftops',True)
+    set_control(mod,'Corner Buildings',True)
     record('Metal shed proportion','0%, 30%, 70%, 100% select a monotonic set; all six one-storey variants; essential roofs remain with rooftop extras disabled')
     set_control(mod,'Metal Shed Mix',0)
     before=snapshot(obj,'Buildings')

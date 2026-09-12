@@ -23,6 +23,7 @@ for version in ('0.1','0.2','0.3'):
     assert abs(get_control(mod,'Rooftop Addition Mix')-(.33 if version=='0.3' else .85))<1e-5
     assert get_control(mod,'Utility Poles') and get_control(mod,'Road Surface')
     assert boundary==[tuple(v.co) for v in obj.data.vertices]
+    set_control(mod,'Corner Buildings',False)
     set_control(mod,'Metal Shed Mix',1)
     bpy.context.view_layer.update();dg=bpy.context.evaluated_depsgraph_get()
     items=[i.object.original for i in dg.object_instances if i.is_instance and i.parent and i.parent.original==obj]
@@ -34,7 +35,7 @@ for version in ('0.1','0.2','0.3'):
     # stale too and every archived version regenerates a fresh 54-object one
     # alongside it.
     assert len([c for c in bpy.data.collections if c.name.startswith('TCity • Buildings')])==2
-    reports.append({'result':'PASS','from':version,'to':'0.4','preserved_controls':list(values),
+    reports.append({'result':'PASS','from':version,'to':'0.7','preserved_controls':list(values),
                     'boundary_unchanged':True,'old_kit_preserved':True,'roof_control':get_control(mod,'Rooftop Addition Mix'),'new_instances':len(items)})
 (ROOT/'dist/upgrade_test_results.json').write_text(json.dumps(reports,indent=2))
 tcity.unregister();print('TCITY_UPGRADE_PASS',json.dumps(reports))

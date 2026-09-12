@@ -1,9 +1,7 @@
-"""Curved road pipeline (docs/PLAN.md §4-§5, milestone 0.5.0).
+"""Road-driven district pipeline for TCity 0.7.
 
-Independent from the orthogonal-grid pipeline in nodes.py/infrastructure.py — the
-two branches are switched at the top of the district graph (decision 3: dual
-branches stay separate through 0.5/0.6, converging only in 0.7). No Python runs
-during evaluation; everything here only *builds* the Geometry Nodes graph once.
+Hand-drawn or external curves override an internal orthogonal road mesh. No Python
+runs during evaluation; this module only constructs Geometry Nodes.
 """
 import bpy
 from .assets import material
@@ -89,6 +87,11 @@ def _point_count(g,geo):
     return n.outputs['Point Count']
 
 
+def _mesh_point_count(g,geo):
+    n=g.node('GeometryNodeAttributeDomainSize',component='MESH');g.put(geo,n.inputs['Geometry'])
+    return n.outputs['Point Count']
+
+
 def _self_union(g,geo,label=''):
     """Mesh Boolean UNION on a single (possibly multi-island, overlapping) input —
     merges overlapping solids in place, e.g. streets meeting at a junction
@@ -111,10 +114,7 @@ def _self_union(g,geo,label=''):
 
 def _boolean_op(g,a,b,op,label=''):
     n=g.node('GeometryNodeMeshBoolean',label or ('Curved street '+op.lower()),operation=op,solver='EXACT')
-    if op=='INTERSECT':
-        g.put(a,n.inputs['Mesh 2']);g.put(b,n.inputs['Mesh 2'])
-    else:
-        g.put(a,n.inputs['Mesh 1']);g.put(b,n.inputs['Mesh 2'])
+    g.put(a,n.inputs['Mesh 1']);g.put(b,n.inputs['Mesh 2'])
     return n.outputs['Mesh']
 
 
@@ -155,20 +155,73 @@ def find_junctions(g,road_mesh_geo):
     return pts.outputs['Points'],has_junctions
 
 
+def build_grid_network(g,p,origin,span_x,span_y,px,py):
+    """Build centered roads with shared junctions and boundary-reaching ends."""
+    outer=_add(g,_mul(g,p['Road Width'],.5),p['Sidewalk Width'])
+    reach_x=_add(g,_mul(g,span_x,.5),_add(g,outer,.5))
+    reach_y=_add(g,_mul(g,span_y,.5),_add(g,outer,.5))
+    usable_x=g.math('MAXIMUM',_sub(g,span_x,_mul(g,outer,2)),0)
+    usable_y=g.math('MAXIMUM',_sub(g,span_y,_mul(g,outer,2)),0)
+    steps_x=g.math('MAXIMUM',g.math('FLOOR',g.math('DIVIDE',usable_x,px)),1)
+    steps_y=g.math('MAXIMUM',g.math('FLOOR',g.math('DIVIDE',usable_y,py)),1)
+    extent_x=_mul(g,steps_x,px);extent_y=_mul(g,steps_y,py)
+    count_x=_add(g,steps_x,3);count_y=_add(g,steps_y,3)
+    grid=g.node('GeometryNodeMeshGrid','Internal orthogonal road network')
+    g.put(span_x,grid.inputs['Size X']);g.put(span_y,grid.inputs['Size Y'])
+    g.put(count_x,grid.inputs['Vertices X']);g.put(count_y,grid.inputs['Vertices Y'])
+    idx=g.node('GeometryNodeInputIndex').outputs[0]
+    col=g.math('MODULO',idx,count_x);row=g.math('FLOOR',g.math('DIVIDE',idx,count_x))
+    def coordinate(slot,count,period,extent,reach,label):
+        interior=_sub(g,_mul(g,_sub(g,slot,1),period),_mul(g,extent,.5))
+        first=g.node('GeometryNodeSwitch',label+' first boundary',input_type='FLOAT')
+        g.put(g.equal(slot,0,.01),first.inputs['Switch']);g.put(interior,first.inputs['False']);g.put(_mul(g,reach,-1),first.inputs['True'])
+        last=g.node('GeometryNodeSwitch',label+' last boundary',input_type='FLOAT')
+        g.put(g.equal(slot,_sub(g,count,1),.01),last.inputs['Switch']);g.put(first.outputs[0],last.inputs['False']);g.put(reach,last.inputs['True'])
+        return last.outputs[0]
+    local_x=coordinate(col,count_x,px,extent_x,reach_x,'Grid X')
+    local_y=coordinate(row,count_y,py,extent_y,reach_y,'Grid Y')
+    center=g.vmath('ADD',origin,g.vector(_mul(g,span_x,.5),_mul(g,span_y,.5),0))
+    positioned=g.node('GeometryNodeSetPosition','Centered irregular road grid')
+    g.put(grid.outputs['Mesh'],positioned.inputs['Geometry']);g.put(g.vmath('ADD',center,g.vector(local_x,local_y,0)),positioned.inputs['Position'])
+    edges=g.node('GeometryNodeDeleteGeometry','Keep road grid edges',domain='FACE',mode='ONLY_FACE')
+    g.put(positioned.outputs['Geometry'],edges.inputs['Geometry']);g.put(True,edges.inputs['Selection'])
+    pos=g.node('GeometryNodeInputPosition').outputs[0];pos_sep=g.node('ShaderNodeSeparateXYZ');g.put(pos,pos_sep.inputs[0])
+    center_sep=g.node('ShaderNodeSeparateXYZ');g.put(center,center_sep.inputs[0])
+    min_x=_sub(g,center_sep.outputs['X'],reach_x);max_x=_add(g,center_sep.outputs['X'],reach_x)
+    min_y=_sub(g,center_sep.outputs['Y'],reach_y);max_y=_add(g,center_sep.outputs['Y'],reach_y)
+    perimeter_x=g.boolean('OR',g.equal(pos_sep.outputs['X'],min_x,.01),g.equal(pos_sep.outputs['X'],max_x,.01))
+    perimeter_y=g.boolean('OR',g.equal(pos_sep.outputs['Y'],min_y,.01),g.equal(pos_sep.outputs['Y'],max_y,.01))
+    without_perimeter=g.node('GeometryNodeDeleteGeometry','Remove boundary perimeter roads',domain='EDGE',mode='ALL')
+    g.put(edges.outputs['Geometry'],without_perimeter.inputs['Geometry'])
+    g.put(g.boolean('OR',perimeter_x,perimeter_y),without_perimeter.inputs['Selection'])
+    return without_perimeter.outputs['Geometry']
+
+
 # --------------------------------------------------------------- 4.1 centerline
-def build_centerline(g,p,region_geo,road_mesh_geo):
-    """Combine mesh-drawn road edges with an optional external curve object.
+def build_centerline(g,p,region_geo,road_mesh_geo,grid_road_mesh_geo,boundary_sel):
+    """Choose drawn/external roads or the internal orthogonal fallback.
 
     road_mesh_geo is already the region's free (Face Count == 0) edges, pre-filtered
     by nodes.py's ensure_group() — not a boolean selection field.
 
-    Returns (curve geometry resampled by Road Resolution with tc_u/tc_curve_id/
-    tc_junction_dist/tc_markings stored, has_curve boolean field, junction points,
-    has_junctions boolean field).
+    Returns the resampled centerline with inspection attributes, junction points,
+    a junction-presence field, and whether the source came from the user.
     """
-    junction_points,has_junctions=find_junctions(g,road_mesh_geo)
+    has_drawn=g.math('GREATER_THAN',_mesh_point_count(g,road_mesh_geo),0)
+    mesh_source=g.node('GeometryNodeSwitch','Internal grid or drawn road edges',input_type='GEOMETRY')
+    g.put(has_drawn,mesh_source.inputs['Switch'])
+    g.put(grid_road_mesh_geo,mesh_source.inputs['False']);g.put(road_mesh_geo,mesh_source.inputs['True'])
+    selected_mesh=mesh_source.outputs[0]
+    junction_points,has_mesh_junctions=find_junctions(g,selected_mesh)
+    junction_pos=g.node('GeometryNodeInputPosition').outputs[0]
+    interior_junctions=g.node('GeometryNodeSeparateGeometry','Junctions inside region',domain='POINT')
+    g.put(junction_points,interior_junctions.inputs['Geometry'])
+    junction_clearance=_add(g,_add(g,_mul(g,p['Road Width'],.5),p['Sidewalk Width']),.55)
+    g.put(_inside(g,p,region_geo,boundary_sel,junction_pos,junction_clearance),interior_junctions.inputs['Selection'])
+    junction_points=interior_junctions.outputs['Selection']
+    has_mesh_junctions=g.math('GREATER_THAN',_point_count(g,junction_points),0)
     mesh_curve=g.node('GeometryNodeMeshToCurve','Free edges to poly curve')
-    g.put(road_mesh_geo,mesh_curve.inputs['Mesh'])
+    g.put(selected_mesh,mesh_curve.inputs['Mesh'])
     length_node=g.node('GeometryNodeSplineLength')
     poly_with_len=_store(g,mesh_curve.outputs[0],'tc_orig_len',length_node.outputs['Length'],'FLOAT',domain='CURVE')
     smooth=g.node('GeometryNodeCurveSplineType','Smooth streets',spline_type='CATMULL_ROM')
@@ -181,7 +234,7 @@ def build_centerline(g,p,region_geo,road_mesh_geo):
     g.put(_named(g,'tc_orig_len'),_enabled(trim,'End'))
     smoothed=trim.outputs['Curve']
     smooth_switch=g.node('GeometryNodeSwitch','Smooth or sharp streets',input_type='GEOMETRY')
-    g.put(p['Smooth Streets'],smooth_switch.inputs['Switch'])
+    g.put(g.boolean('AND',p['Smooth Streets'],has_drawn),smooth_switch.inputs['Switch'])
     g.put(poly_with_len,smooth_switch.inputs['False']);g.put(smoothed,smooth_switch.inputs['True'])
     mesh_result=smooth_switch.outputs[0]
 
@@ -193,9 +246,16 @@ def build_centerline(g,p,region_geo,road_mesh_geo):
     g.put(mesh_result,curve_switch.inputs['False']);g.put(obj_info.outputs['Geometry'],curve_switch.inputs['True'])
     combined=curve_switch.outputs[0]
 
+    empty=g.node('GeometryNodeJoinGeometry','No external-curve junction points').outputs[0]
+    junction_switch=g.node('GeometryNodeSwitch','External curves have no mesh junctions',input_type='GEOMETRY')
+    g.put(has_external,junction_switch.inputs['Switch'])
+    g.put(junction_points,junction_switch.inputs['False']);g.put(empty,junction_switch.inputs['True'])
+    junction_points=junction_switch.outputs[0]
+    has_junctions=g.boolean('AND',has_mesh_junctions,g.boolean('NOT',has_external))
+    has_user_roads=g.boolean('OR',has_drawn,has_external)
+
     idx=g.node('GeometryNodeInputIndex').outputs[0]
     combined=_store(g,combined,'tc_curve_id',idx,'INT',domain='CURVE')
-    has_curve=g.math('GREATER_THAN',_spline_count(g,combined),0)
 
     resample=g.node('GeometryNodeResampleCurve','Road resolution')
     g.put(combined,resample.inputs['Curve'])
@@ -215,7 +275,7 @@ def build_centerline(g,p,region_geo,road_mesh_geo):
     g.put(99999.,junction_dist.inputs['False']);g.put(prox.outputs['Distance'],junction_dist.inputs['True'])
     resampled=_store(g,resampled,'tc_junction_dist',junction_dist.outputs[0],'FLOAT')
     resampled=_store(g,resampled,'tc_markings',p['Road Markings'],'FLOAT')
-    return resampled,has_curve,junction_points,has_junctions
+    return resampled,junction_points,has_junctions,has_user_roads
 
 
 # ----------------------------------------------------------------- 4.2 profile
@@ -234,7 +294,7 @@ def build_profile(g,p):
     x=_index_switch(g,idx,'FLOAT',xs,'Profile lateral offset')
     z=_index_switch(g,idx,'FLOAT',zs,'Profile height')
     prof=_index_switch(g,idx,'INT',profs,'Profile material id')
-    pos=g.vector(x,0,z)
+    pos=g.vector(x,g.math('MULTIPLY',z,-1),0)
     setpos=g.node('GeometryNodeSetPosition');g.put(line.outputs['Mesh'],setpos.inputs['Geometry']);g.put(pos,setpos.inputs['Position'])
     tagged=_store(g,setpos.outputs[0],'tc_v',x,'FLOAT')
     tagged=_store(g,tagged,'tc_profile',prof,'INT')
@@ -242,6 +302,26 @@ def build_profile(g,p):
     cyclic=g.node('GeometryNodeSetSplineCyclic','Close profile loop')
     g.put(to_curve.outputs[0],cyclic.inputs['Curve']);g.put(True,cyclic.inputs['Selection']);g.put(True,cyclic.inputs['Cyclic'])
     return cyclic.outputs[0],half,outer
+
+
+def build_block_cutter(g,centerline,outer):
+    """Convex street volume used only to split residual ground into islands."""
+    line=g.node('GeometryNodeMeshLine','Block cutter profile points',mode='OFFSET');g.put(4,line.inputs['Count'])
+    idx=g.node('GeometryNodeInputIndex').outputs[0]
+    x=_index_switch(g,idx,'FLOAT',[g.math('MULTIPLY',outer,-1),g.math('MULTIPLY',outer,-1),outer,outer],
+                    'Block cutter lateral offset')
+    z=_index_switch(g,idx,'FLOAT',[-.5,.5,.5,-.5],'Block cutter height')
+    positioned=g.node('GeometryNodeSetPosition','Block cutter rectangle')
+    g.put(line.outputs['Mesh'],positioned.inputs['Geometry']);g.put(g.vector(x,g.math('MULTIPLY',z,-1),0),positioned.inputs['Position'])
+    curve=g.node('GeometryNodeMeshToCurve');g.put(positioned.outputs['Geometry'],curve.inputs['Mesh'])
+    cyclic=g.node('GeometryNodeSetSplineCyclic','Close block cutter profile')
+    g.put(curve.outputs['Curve'],cyclic.inputs['Curve']);g.put(True,cyclic.inputs['Selection']);g.put(True,cyclic.inputs['Cyclic'])
+    swept=g.node('GeometryNodeCurveToMesh','Sweep block cutter')
+    g.put(centerline,swept.inputs['Curve']);g.put(cyclic.outputs['Curve'],swept.inputs['Profile Curve'])
+    swept.inputs['Fill Caps'].default_value=True
+    union=g.node('GeometryNodeMeshBoolean','Union convex block cutter',operation='UNION',solver='EXACT')
+    g.put(swept.outputs['Mesh'],union.inputs['Mesh 2'])
+    return union.outputs['Mesh']
 
 
 # ------------------------------------------------------- 4.2 surface + ground
@@ -263,18 +343,29 @@ def build_surface(g,p,centerline,junction_points,has_junctions,road_material_fn)
     g.put(junction_points,fillets.inputs['Points']);g.put(cylinder_geo,fillets.inputs['Instance'])
     fillets_realized=g.node('GeometryNodeRealizeInstances');g.put(fillets.outputs['Instances'],fillets_realized.inputs['Geometry'])
     merged_candidate=_self_union(g,_join(g,[swept.outputs[0],fillets_realized.outputs[0]]),'Union streets + junction fillets')
-    # No junctions (the common single-street case): skip the extra EXACT boolean
-    # entirely rather than self-union a single already-clean solid with itself —
+    # No junctions (the common single-street case): skip the extra self-union
+    # entirely rather than merge a single already-clean solid with itself —
     # keeps 0.5's behavior and performance unchanged when there's nothing to merge.
     merge_switch=g.node('GeometryNodeSwitch','Skip union when there are no junctions',input_type='GEOMETRY')
     g.put(has_junctions,merge_switch.inputs['Switch'])
     g.put(swept.outputs[0],merge_switch.inputs['False']);g.put(merged_candidate,merge_switch.inputs['True'])
-    merged=merge_switch.outputs[0]
-
-    clip_bottom=g.math('MULTIPLY',p['Road Thickness'],-1)
-    clip_top=g.math('ADD',p['Curb Height'],1)
-    clip_volume=_region_prism(g,p,clip_bottom,clip_top,'Road clip volume')
-    clipped=_boolean_op(g,merged,clip_volume,'INTERSECT','Clip road to region')
+    clipped=merge_switch.outputs[0]
+    clip_pos=g.node('GeometryNodeInputPosition').outputs[0]
+    clip_ray=g.node('GeometryNodeRaycast','Remove road vertices outside region',data_type='FLOAT')
+    g.put(p['Geometry'],clip_ray.inputs['Target Geometry'])
+    g.put(g.vmath('ADD',clip_pos,(0,0,100)),clip_ray.inputs['Source Position'])
+    clip_ray.inputs['Ray Direction'].default_value=(0,0,-1);clip_ray.inputs['Ray Length'].default_value=200
+    clean=g.node('GeometryNodeDeleteGeometry','Strict region mask for road network',domain='POINT',mode='ALL')
+    g.put(clipped,clean.inputs['Geometry']);g.put(g.boolean('NOT',clip_ray.outputs['Is Hit']),clean.inputs['Selection'])
+    face_pos=g.node('GeometryNodeInputPosition').outputs[0]
+    face_ray=g.node('GeometryNodeRaycast','Remove road faces crossing region gaps',data_type='FLOAT')
+    g.put(p['Geometry'],face_ray.inputs['Target Geometry'])
+    g.put(g.vmath('ADD',face_pos,(0,0,100)),face_ray.inputs['Source Position'])
+    face_ray.inputs['Ray Direction'].default_value=(0,0,-1);face_ray.inputs['Ray Length'].default_value=200
+    clean_faces=g.node('GeometryNodeDeleteGeometry','Strict face mask for road network',domain='FACE',mode='ALL')
+    g.put(clean.outputs['Geometry'],clean_faces.inputs['Geometry'])
+    g.put(g.boolean('NOT',face_ray.outputs['Is Hit']),clean_faces.inputs['Selection'])
+    clipped=clean_faces.outputs['Geometry']
     normal=g.node('GeometryNodeInputNormal',"Face normal");sep=g.node('ShaderNodeSeparateXYZ');g.put(normal.outputs[0],sep.inputs[0])
     flat=g.math('GREATER_THAN',sep.outputs['Z'],.9)
     # Classify by distance-to-centerline recomputed fresh from the face's own
@@ -312,7 +403,16 @@ def build_surface(g,p,centerline,junction_points,has_junctions,road_material_fn)
     road_on=g.boolean('AND',p['Ground'],p['Road Surface'])
     sidewalk_on=g.boolean('AND',p['Ground'],p['Sidewalks'])
     ground=_region_prism(g,p,-.05,0,'Non-road ground slab')
-    ground=_boolean_op(g,ground,clipped,'DIFFERENCE','Non-road ground minus street')
+    block_cutter=build_block_cutter(g,centerline,outer)
+    ground=_boolean_op(g,ground,block_cutter,'DIFFERENCE','Non-road ground minus street')
+    clean_ground=g.node('GeometryNodeDeleteGeometry','Strict point mask for residual ground',domain='POINT',mode='ALL')
+    g.put(ground,clean_ground.inputs['Geometry']);g.put(g.boolean('NOT',clip_ray.outputs['Is Hit']),clean_ground.inputs['Selection'])
+    clean_ground_faces=g.node('GeometryNodeDeleteGeometry','Strict face mask for residual ground',domain='FACE',mode='ALL')
+    g.put(clean_ground.outputs['Geometry'],clean_ground_faces.inputs['Geometry'])
+    g.put(g.boolean('NOT',face_ray.outputs['Is Hit']),clean_ground_faces.inputs['Selection'])
+    ground=clean_ground_faces.outputs['Geometry']
+    island=g.node('GeometryNodeInputMeshIsland','Residual block islands')
+    ground=_store(g,ground,'tc_block_id',island.outputs['Island Index'],'INT',label='Store residual block ID')
     ground=_mat(g,_tag(g,ground,4),material('v05 Bare ground',(.30,.27,.20),roughness=.92))
     results=[_gate(g,road,road_on),_gate(g,paving,sidewalk_on),_gate(g,ground,p['Ground'])]
     return results,half,outer
@@ -370,17 +470,32 @@ def _inside(g,p,region_geo,boundary_sel,pos,radius):
     return g.boolean('AND',ray.outputs['Is Hit'],g.math('GREATER_THAN',prox.outputs['Distance'],radius))
 
 
-# ------------------------------------------------------------ 4.3 building line
-def _inside(g,p,region_geo,boundary_sel,pos,radius):
-    ray=g.node('GeometryNodeRaycast','Grounded parcel',data_type='FLOAT')
-    g.put(region_geo,ray.inputs['Target Geometry']);g.put(g.vmath('ADD',pos,(0,0,100)),ray.inputs['Source Position'])
-    ray.inputs['Ray Direction'].default_value=(0,0,-1);ray.inputs['Ray Length'].default_value=200
-    prox=g.node('GeometryNodeProximity',target_element='EDGES')
-    g.put(boundary_sel,prox.inputs['Geometry']);g.put(pos,prox.inputs['Sample Position'])
-    return g.boolean('AND',ray.outputs['Is Hit'],g.math('GREATER_THAN',prox.outputs['Distance'],radius))
+def _open_space_assets(g,p):
+    """Small realized lot surfaces for deterministic vacant-site reuse."""
+    pad_size=g.vector(g.math('MULTIPLY',p['Frontage'],.9),g.math('MULTIPLY',p['Depth'],.9),.06)
+    pad=g.node('GeometryNodeMeshCube','Vacant lot pad');g.put(pad_size,pad.inputs['Size'])
+    pad_geo=_transform(g,pad.outputs['Mesh'],translation=(0,0,.03))
+    parking=_mat(g,_tag(g,pad_geo,5),material('v07 Parking asphalt',(.055,.06,.058),roughness=.9))
+
+    stripe=g.node('GeometryNodeMeshCube','Parking bay stripe')
+    g.put(g.vector(.08,g.math('MULTIPLY',p['Depth'],.72),.025),stripe.inputs['Size'])
+    stripe_parts=[]
+    for factor in (-.28,0,.28):
+        stripe_parts.append(_transform(g,stripe.outputs['Mesh'],translation=g.vector(g.math('MULTIPLY',p['Frontage'],factor),0,.073)))
+    markings=_mat(g,_tag(g,_join(g,stripe_parts,'Parking bay markings'),5),
+                  material('v07 Parking markings',(.78,.77,.66),roughness=.72))
+    parking=_join(g,[parking,markings],'Parking lot asset')
+
+    green=_mat(g,_tag(g,pad_geo,6),material('v07 Pocket green',(.12,.28,.075),roughness=.96))
+    border=g.node('GeometryNodeMeshCube','Pocket green planter')
+    g.put(g.vector(g.math('MULTIPLY',p['Frontage'],.72),g.math('MULTIPLY',p['Depth'],.72),.16),border.inputs['Size'])
+    border_geo=_transform(g,border.outputs['Mesh'],translation=(0,0,.08))
+    border_geo=_mat(g,_tag(g,border_geo,6),material('v07 Pocket green soil',(.16,.10,.055),roughness=1.0))
+    green=_join(g,[green,border_geo],'Pocket green asset')
+    return parking,green
 
 
-def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_points,side):
+def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_points,side,bend_buildings):
     """One row of parcels on one side of the streets, resampled along the offset
     building line (docs/PLAN.md §4.3); optionally bent to follow the curve."""
     outer=g.math('ADD',g.math('MULTIPLY',p['Road Width'],.5),p['Sidewalk Width'])
@@ -516,14 +631,22 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     # asset's footprint was authored at (see residential.py _CORNER_HALF).
     half_asset_width=g.math('MULTIPLY',p['Frontage'],3.18/6.4)
     corner_push=_scale(g,extend_direction,g.math('ADD',outer,half_asset_width))
+    pushed_corner_pos=g.vmath('ADD',pos,corner_push)
+    corner_radius=g.math('ADD',p['Depth'],p['Frontage'])
+    corner_fits=_inside(g,p,region_geo,boundary_sel,pushed_corner_pos,corner_radius)
+    corner_ok=g.boolean('AND',corner_ok,corner_fits)
 
-    choose_normal=g.boolean('AND',g.boolean('AND',inside,own_is_nearest),occupied)
+    choose_normal=g.boolean('AND',g.boolean('AND',g.boolean('AND',inside,own_is_nearest),occupied),
+                             g.boolean('NOT',near_junction))
+    vacant=g.boolean('AND',g.boolean('AND',g.boolean('AND',inside,own_is_nearest),g.boolean('NOT',occupied)),
+                     g.boolean('NOT',near_junction))
 
     floors=g.random('INT',g.math('MINIMUM',p['Min Floors'],p['Max Floors']),g.math('MAXIMUM',p['Min Floors'],p['Max Floors']),p['Seed'],site_id,101)
     typ=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,307),p['Townhouse Mix'])
     palette=g.random('INT',0,2,p['Seed'],site_id,701)
     asset=g.math('ADD',g.math('MULTIPLY',g.math('SUBTRACT',floors,2),6),g.math('ADD',g.math('MULTIPLY',typ,3),palette))
-    is_shed=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,1103),p['Metal Shed Mix'])
+    is_shed=g.boolean('OR',g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,1103),p['Metal Shed Mix']),
+                       g.math('GREATER_THAN',p['Metal Shed Mix'],.999999))
     is_shed=g.boolean('AND',is_shed,g.boolean('NOT',corner_ok))
     shed_asset=g.math('ADD',36,g.random('INT',0,5,p['Seed'],site_id,1201))
     select=g.node('GeometryNodeSwitch','Rowhouse or metal workshop',input_type='INT')
@@ -547,6 +670,10 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     # every corner_ok point, so the two selections can never overlap.
     meshpts_normal=g.node('GeometryNodeSeparateGeometry','Chosen lots',domain='POINT')
     g.put(geo,meshpts_normal.inputs['Geometry']);g.put(choose_normal,meshpts_normal.inputs['Selection'])
+    normal_vertices=g.node('GeometryNodePointsToVertices','Normal sites to mergeable vertices')
+    g.put(meshpts_normal.outputs['Selection'],normal_vertices.inputs['Points'])
+    normal_pts=g.node('GeometryNodeMergeByDistance','Deduplicate coincident normal sites')
+    g.put(normal_vertices.outputs['Mesh'],normal_pts.inputs['Geometry']);normal_pts.inputs['Distance'].default_value=1.0
     meshpts_corner=g.node('GeometryNodeSeparateGeometry','Chosen corner lots',domain='POINT')
     g.put(geo,meshpts_corner.inputs['Geometry']);g.put(corner_ok,meshpts_corner.inputs['Selection'])
     # A junction vertex splits the road into separate splines, and Resample Curve
@@ -555,8 +682,10 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     # a resampled point there too, landing this row's offset at the exact same
     # world position twice. Collapse those coincident corner candidates into one
     # before instancing so the same corner building doesn't get stacked on itself.
+    corner_vertices=g.node('GeometryNodePointsToVertices','Corner sites to mergeable vertices')
+    g.put(meshpts_corner.outputs['Selection'],corner_vertices.inputs['Points'])
     corner_pts=g.node('GeometryNodeMergeByDistance','Deduplicate coincident corner sites')
-    g.put(meshpts_corner.outputs['Selection'],corner_pts.inputs['Geometry']);corner_pts.inputs['Distance'].default_value=1.0
+    g.put(corner_vertices.outputs['Mesh'],corner_pts.inputs['Geometry']);corner_pts.inputs['Distance'].default_value=1.0
     pushed=g.node('GeometryNodeSetPosition','Slide corner site clear of the crossing road')
     g.put(corner_pts.outputs[0],pushed.inputs['Geometry']);g.put(corner_push,pushed.inputs['Offset'])
     corner_pts=pushed
@@ -587,16 +716,24 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
             pieces.append(instance.outputs['Instances'])
         return pieces
 
-    normal_pieces=instance_kit(meshpts_normal.outputs['Selection'],f' on curved lots {side:+d}')
+    normal_pieces=instance_kit(normal_pts.outputs[0],f' on curved lots {side:+d}')
     # Corner buildings are a fixed L-shape baked around the junction's outer
     # corner; bending them along the row (which only makes sense for a single
     # frontage-wide instance) would tear the sideways wing away from its anchor,
     # so they stay rigid regardless of the Bend Buildings to Curve toggle.
     corner_pieces=instance_kit(corner_pts.outputs[0],f' corner {side:+d}')
-    return _bend(g,p,dense_side,normal_pieces,side)+corner_pieces
+    parking_asset,green_asset=_open_space_assets(g,p)
+    parking_pick=g.boolean('OR',g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,3201),p['Parking Mix']),
+                           g.math('GREATER_THAN',p['Parking Mix'],.999999))
+    open_on=g.boolean('AND',p['Ground'],p['Open Spaces'])
+    parking_selection=g.boolean('AND',g.boolean('AND',vacant,parking_pick),open_on)
+    green_selection=g.boolean('AND',g.boolean('AND',vacant,g.boolean('NOT',parking_pick)),open_on)
+    open_spaces=[_instance(g,geo,parking_asset,parking_selection,align.outputs['Rotation'],label=f'Parking lots {side:+d}',realize=True),
+                 _instance(g,geo,green_asset,green_selection,align.outputs['Rotation'],label=f'Pocket greens {side:+d}',realize=True)]
+    return _bend(g,dense_side,normal_pieces,side,bend_buildings)+corner_pieces+open_spaces
 
 
-def _bend(g,p,frontage_curve,pieces,side):
+def _bend(g,frontage_curve,pieces,side,bend_buildings):
     """Realize each rigid instance and resample its vertices along the offset
     building line, holding local footprint shape (docs/PLAN.md §4.3 last algorithm).
 
@@ -628,13 +765,13 @@ def _bend(g,p,frontage_curve,pieces,side):
         moved=g.node('GeometryNodeSetPosition','Bent world position')
         g.put(realized.outputs[0],moved.inputs['Geometry']);g.put(final_pos,moved.inputs['Position'])
         rigid_switch=g.node('GeometryNodeSwitch','Bend toggle',input_type='GEOMETRY')
-        g.put(p['Bend Buildings to Curve'],rigid_switch.inputs['Switch'])
+        g.put(bend_buildings,rigid_switch.inputs['Switch'])
         g.put(instances,rigid_switch.inputs['False']);g.put(moved.outputs[0],rigid_switch.inputs['True'])
         bent.append(rigid_switch.outputs[0])
     return bent
 
 
-def build_sites(g,p,cols,region_geo,boundary_sel,centerline,junction_points):
+def build_sites(g,p,cols,region_geo,boundary_sel,centerline,junction_points,bend_buildings):
     dense=g.node('GeometryNodeResampleCurve','Dense centerline for offsets')
     g.put(centerline,dense.inputs['Curve']);dense.inputs['Mode'].default_value='Length';g.put(.25,dense.inputs['Length'])
     tangent=g.node('GeometryNodeInputTangent').outputs[0]
@@ -648,7 +785,7 @@ def build_sites(g,p,cols,region_geo,boundary_sel,centerline,junction_points):
     g.put(centerline,centerline_pts.inputs['Curve'])
     pieces=[]
     for side in (1,-1):
-        pieces+=_place_side(g,p,cols,region_geo,boundary_sel,centerline_pts.outputs['Points'],dense_geo,junction_points,side)
+        pieces+=_place_side(g,p,cols,region_geo,boundary_sel,centerline_pts.outputs['Points'],dense_geo,junction_points,side,bend_buildings)
     return pieces
 
 
@@ -758,6 +895,17 @@ def _wires_side(g,p,region_geo,boundary_sel,centerline,side,junction_points):
     valid=_inside(g,p,region_geo,boundary_sel,pos_field,.93)
     next_valid=_inside(g,p,region_geo,boundary_sel,sample_pos.outputs['Value'],.93)
     connected=g.boolean('AND',valid,g.boolean('AND',next_offset.outputs['Is Valid Offset'],next_valid))
+    boundary_curve=g.node('GeometryNodeMeshToCurve',f'Wire boundary guards {side:+d}')
+    g.put(boundary_sel,boundary_curve.inputs['Mesh'])
+    guard_profile=g.node('GeometryNodeCurvePrimitiveCircle',mode='RADIUS')
+    guard_profile.inputs['Resolution'].default_value=8;guard_profile.inputs['Radius'].default_value=.45
+    guard=g.node('GeometryNodeCurveToMesh',f'Inflated wire boundary guards {side:+d}')
+    g.put(boundary_curve.outputs[0],guard.inputs['Curve']);g.put(guard_profile.outputs[0],guard.inputs['Profile Curve'])
+    chord_direction=g.node('ShaderNodeVectorMath',operation='NORMALIZE');g.put(chord,chord_direction.inputs[0])
+    boundary_ray=g.node('GeometryNodeRaycast',f'Reject span crossing boundary {side:+d}',data_type='FLOAT')
+    g.put(guard.outputs['Mesh'],boundary_ray.inputs['Target Geometry']);g.put(pos_field,boundary_ray.inputs['Source Position'])
+    g.put(chord_direction.outputs['Vector'],boundary_ray.inputs['Ray Direction']);g.put(chord_length.outputs['Value'],boundary_ray.inputs['Ray Length'])
+    connected=g.boolean('AND',connected,g.boolean('NOT',boundary_ray.outputs['Is Hit']))
     # 0.6: interrupt any span whose midpoint falls within a junction's fillet
     # radius (docs/PLAN.md 0.6.0 "架空線在路口中斷"), reusing build_surface's
     # own fillet_radius formula (outer + .5).
@@ -772,7 +920,6 @@ def _wires_side(g,p,region_geo,boundary_sel,centerline,side,junction_points):
     tagged=_store(g,tagged,'tc_chord_len',chord_length.outputs['Value'],'FLOAT')
     tagged=_store(g,tagged,'tc_connected',connected,'BOOLEAN')
     g.put(tagged,spanpts.inputs['Curve'])
-    span_pos=g.node('GeometryNodeInputPosition').outputs[0]
     chord_attr=_named(g,'tc_chord','FLOAT_VECTOR');chord_len_attr=_named(g,'tc_chord_len')
     connected_attr=_named(g,'tc_connected','BOOLEAN')
     align=g.node('FunctionNodeAlignRotationToVector',f'Span follows chord {side:+d}',axis='X')
@@ -782,8 +929,10 @@ def _wires_side(g,p,region_geo,boundary_sel,centerline,side,junction_points):
     resample=g.node('GeometryNodeResampleCurve','Wire sag profile');g.put(line.outputs[0],resample.inputs['Curve']);resample.inputs['Count'].default_value=33
     factor=g.node('GeometryNodeSplineParameter').outputs['Factor']
     sag=g.math('MINIMUM',p['Cable Sag'],g.math('MULTIPLY',p['Pole Height'],.12))
-    drop=g.math('MULTIPLY',g.math('MULTIPLY',g.math('MULTIPLY',factor,g.math('SUBTRACT',1,factor)),sag),-4)
-    bend=g.node('GeometryNodeSetPosition','Parabolic cable sag (curved)')
+    one_minus=g.math('SUBTRACT',1,factor)
+    shape=g.math('MULTIPLY',g.math('MULTIPLY',factor,factor),g.math('MULTIPLY',one_minus,one_minus))
+    drop=g.math('MULTIPLY',g.math('MULTIPLY',shape,sag),-16)
+    bend=g.node('GeometryNodeSetPosition','Smooth cable sag (curved)')
     g.put(resample.outputs[0],bend.inputs['Geometry']);g.put(g.vector(0,0,drop),bend.inputs['Offset'])
     circle=g.node('GeometryNodeCurvePrimitiveCircle',mode='RADIUS');circle.inputs['Resolution'].default_value=8;circle.inputs['Radius'].default_value=.019
     tube=g.node('GeometryNodeCurveToMesh');g.put(bend.outputs[0],tube.inputs['Curve']);g.put(circle.outputs[0],tube.inputs['Profile Curve']);tube.inputs['Fill Caps'].default_value=True
@@ -793,16 +942,25 @@ def _wires_side(g,p,region_geo,boundary_sel,centerline,side,junction_points):
     wire_geo=_mat(g,_tag(g,_join(g,wires),3),material('v04 Cable rubber',(.015,.018,.019),roughness=.57))
     wire_on=g.boolean('AND',p['Utility Poles'],p['Overhead Wires'])
     scale=g.vector(chord_len_attr,1,1)
-    return [_instance(g,spanpts.outputs['Points'],wire_geo,g.boolean('AND',wire_on,connected_attr),
+    span_id=g.math('ADD',idxnode,0 if side>0 else 1000000)
+    span_points=_store(g,spanpts.outputs['Points'],'tc_span_id',span_id,'INT')
+    return [_instance(g,span_points,wire_geo,g.boolean('AND',wire_on,connected_attr),
                        align.outputs['Rotation'],scale,label=f'Continuous overhead spans {side:+d}',realize=True)]
 
 
 # ------------------------------------------------------------------ orchestrator
-def curve_district(g,p,cols,region_geo,road_mesh_geo,boundary_sel,road_material_fn):
-    """Entry point for the whole curved-road branch. Returns (geometry, has_curve)."""
-    centerline,has_curve,junction_points,has_junctions=build_centerline(g,p,region_geo,road_mesh_geo)
-    surface,half,outer=build_surface(g,p,centerline,junction_points,has_junctions,road_material_fn)
-    sites=build_sites(g,p,cols,region_geo,boundary_sel,centerline,junction_points)
+def curve_district(g,p,cols,region_geo,road_mesh_geo,grid_road_mesh_geo,boundary_sel):
+    """Build every district from one selected road-centerline source."""
+    centerline,junction_points,has_junctions,has_user_roads=build_centerline(
+        g,p,region_geo,road_mesh_geo,grid_road_mesh_geo,boundary_sel)
+    bend_buildings=g.boolean('AND',p['Bend Buildings to Curve'],has_user_roads)
+    empty=g.node('GeometryNodeJoinGeometry','No internal-grid surface fillets').outputs[0]
+    surface_junctions=g.node('GeometryNodeSwitch','User-road surface junctions',input_type='GEOMETRY')
+    g.put(has_user_roads,surface_junctions.inputs['Switch'])
+    g.put(empty,surface_junctions.inputs['False']);g.put(junction_points,surface_junctions.inputs['True'])
+    surface_has_junctions=g.boolean('AND',has_junctions,has_user_roads)
+    surface,half,outer=build_surface(g,p,centerline,surface_junctions.outputs[0],surface_has_junctions,curve_road_material)
+    sites=build_sites(g,p,cols,region_geo,boundary_sel,centerline,junction_points,bend_buildings)
     furniture=build_furniture(g,p,region_geo,boundary_sel,centerline)
     wires=build_wires(g,p,region_geo,boundary_sel,centerline,junction_points)
-    return _join(g,surface+sites+furniture+wires,'Curved district layers'),has_curve
+    return _join(g,surface+sites+furniture+wires,'Unified district layers')

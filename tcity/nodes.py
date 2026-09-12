@@ -1,9 +1,8 @@
 """Live region-to-district Geometry Nodes graph (no frame handlers)."""
-import math
 import bpy
 from .assets import PREFIX, ensure_assets, material
 
-GROUP_NAME = 'TCity • Taiwan District v0.6'
+GROUP_NAME = 'TCity • Taiwan District v0.7'
 
 
 class Graph:
@@ -116,6 +115,8 @@ def road_material():
 SOCKETS = [
     ('Seed','NodeSocketInt',17,0,100000,'Deterministic district variation / 隨機種子'),
     ('Density','NodeSocketFloat',.94,0,1,'Probability of occupied lots / 建築密度'),
+    ('Open Spaces','NodeSocketBool',True,None,None,'Convert vacant valid lots to parking or pocket green / 空置基地轉為停車場或口袋綠地'),
+    ('Parking Mix','NodeSocketFloat',.55,0,1,'Share of open lots used for parking; remainder becomes green / 空地中的停車場比例'),
     ('Frontage','NodeSocketFloat',7.2,5.2,10,'Lot frontage in metres / 面寬'),
     ('Depth','NodeSocketFloat',14,9,18,'Lot depth in metres / 進深'),
     ('Lots per Block','NodeSocketInt',4,2,10,'Shopfronts along each side / 每排戶數'),
@@ -183,96 +184,16 @@ def ensure_group():
     road_edge_sel=g.equal(nbr.outputs['Face Count'],0)
     road_edges=g.node('GeometryNodeSeparateGeometry','Road centerline edges',domain='EDGE')
     g.put(p['Geometry'],road_edges.inputs['Geometry']);g.put(road_edge_sel,road_edges.inputs['Selection'])
-    g.section('02 / PARCELS · streets, paired rows and back alleys',(1000,0))
+    g.section('02 / ROAD GRID · unified centerline source',(1000,0))
     extra=g.math('MULTIPLY',p['Sidewalk Width'],2)
     px=g.math('ADD',g.math('ADD',g.math('MULTIPLY',p['Frontage'],p['Lots per Block']),p['Road Width']),extra)
     py=g.math('ADD',g.math('ADD',g.math('ADD',g.math('MULTIPLY',p['Depth'],2),p['Alley Width']),p['Road Width']),extra)
-    nx=g.math('MAXIMUM',g.math('CEIL',g.math('DIVIDE',sep.outputs['X'],px)),1)
-    ny=g.math('MAXIMUM',g.math('CEIL',g.math('DIVIDE',sep.outputs['Y'],py)),1)
-    slots=g.math('MULTIPLY',p['Lots per Block'],2)
-    count=g.math('MINIMUM',g.math('MULTIPLY',g.math('MULTIPLY',nx,ny),slots),20000)
-    line=g.node('GeometryNodeMeshLine',mode='OFFSET');g.put(count,line.inputs['Count'])
-    idx=g.node('GeometryNodeInputIndex').outputs[0]
-    block=g.math('FLOOR',g.math('DIVIDE',idx,slots))
-    bx=g.math('MODULO',block,nx);by=g.math('FLOOR',g.math('DIVIDE',block,nx))
-    col=g.math('MODULO',idx,p['Lots per Block'])
-    row=g.math('MODULO',g.math('FLOOR',g.math('DIVIDE',idx,p['Lots per Block'])),2)
-    x=g.math('ADD',g.math('ADD',g.math('MULTIPLY',bx,px),g.math('MULTIPLY',g.math('ADD',col,.5),p['Frontage'])),g.math('MULTIPLY',p['Road Width'],.5))
-    y=g.math('ADD',g.math('ADD',g.math('MULTIPLY',by,py),g.math('MULTIPLY',row,g.math('ADD',p['Depth'],p['Alley Width']))),g.math('MULTIPLY',g.math('ADD',p['Depth'],p['Road Width']),.5))
-    loc=g.vmath('ADD',origin,g.vector(g.math('ADD',x,p['Sidewalk Width']),g.math('ADD',y,p['Sidewalk Width']),0))
-    positions=g.node('GeometryNodeSetPosition');g.put(line.outputs['Mesh'],positions.inputs['Geometry']);g.put(loc,positions.inputs['Position'])
-    # Capture row direction before selections compact the point domain.
-    capture=g.node('GeometryNodeCaptureAttribute',domain='POINT')
-    capture.capture_items.new('FLOAT','Facing')
-    g.put(positions.outputs['Geometry'],capture.inputs['Geometry'])
-    g.put(g.math('MULTIPLY',row,math.pi),capture.inputs['Facing'])
-    g.section('03 / BOUNDARY · inside test + full footprint clearance',(2300,0))
-    pos=g.node('GeometryNodeInputPosition').outputs[0]
-    ray=g.node('GeometryNodeRaycast',data_type='FLOAT')
-    g.put(p['Geometry'],ray.inputs['Target Geometry'])
-    g.put(g.vmath('ADD',pos,(0,0,100)),ray.inputs['Source Position'])
-    ray.inputs['Ray Direction'].default_value=(0,0,-1);ray.inputs['Ray Length'].default_value=200
-    prox=g.node('GeometryNodeProximity',target_element='EDGES')
-    g.put(boundary.outputs['Selection'],prox.inputs['Geometry']);g.put(pos,prox.inputs['Sample Position'])
-    radius=g.math('ADD',g.math('MULTIPLY',g.math('SQRT',g.math('ADD',g.math('MULTIPLY',p['Frontage'],p['Frontage']),g.math('MULTIPLY',p['Depth'],p['Depth']))),.5),p['Boundary Setback'])
-    inside=g.boolean('AND',ray.outputs['Is Hit'],g.math('GREATER_THAN',prox.outputs['Distance'],radius))
-    occupied=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],idx,43),p['Density'])
-    choose=g.boolean('AND',inside,occupied)
-    # Store inspection attributes before filtering, keeping IDs stable by parcel.
-    floors=g.random('INT',g.math('MINIMUM',p['Min Floors'],p['Max Floors']),g.math('MAXIMUM',p['Min Floors'],p['Max Floors']),p['Seed'],idx,101)
-    typ=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],idx,307),p['Townhouse Mix'])
-    palette=g.random('INT',0,2,p['Seed'],idx,701)
-    asset=g.math('ADD',g.math('MULTIPLY',g.math('SUBTRACT',floors,2),6),g.math('ADD',g.math('MULTIPLY',typ,3),palette))
-    is_shed=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],idx,1103),p['Metal Shed Mix'])
-    shed_asset=g.math('ADD',36,g.random('INT',0,5,p['Seed'],idx,1201))
-    select=g.node('GeometryNodeSwitch','Rowhouse or metal workshop',input_type='INT')
-    g.put(is_shed,select.inputs['Switch']);g.put(asset,select.inputs['False']);g.put(shed_asset,select.inputs['True'])
-    asset=select.outputs[0]
-    storeys=g.node('GeometryNodeSwitch','One-storey sheds',input_type='INT')
-    g.put(is_shed,storeys.inputs['Switch']);g.put(floors,storeys.inputs['False']);storeys.inputs['True'].default_value=1
-    floors=storeys.outputs[0]
-    geo=capture.outputs['Geometry']
-    for name,value,dtype in [('tc_parcel_id',idx,'INT'),('tc_floors',floors,'INT'),('tc_asset',asset,'INT'),('tc_is_shed',is_shed,'BOOLEAN')]:
-        store=g.node('GeometryNodeStoreNamedAttribute',data_type=dtype,domain='POINT')
-        store.inputs['Name'].default_value=name;g.put(geo,store.inputs['Geometry']);g.put(value,store.inputs['Value'])
-        geo=store.outputs['Geometry']
-    points=g.node('GeometryNodeMeshToPoints',mode='VERTICES')
-    g.put(geo,points.inputs['Mesh']);g.put(choose,points.inputs['Selection'])
-    g.section('04 / KIT · deterministic facade, roof, signage and props',(3700,0))
-    named=g.node('GeometryNodeInputNamedAttribute',data_type='INT');named.inputs['Name'].default_value='tc_asset'
-    shed_attr=g.node('GeometryNodeInputNamedAttribute',data_type='BOOLEAN');shed_attr.inputs['Name'].default_value='tc_is_shed'
-    parcel_attr=g.node('GeometryNodeInputNamedAttribute',data_type='INT');parcel_attr.inputs['Name'].default_value='tc_parcel_id'
-    addon_probability=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],parcel_attr.outputs['Attribute'],1601),p['Rooftop Addition Mix'])
-    scale=g.vector(g.math('DIVIDE',p['Frontage'],6.4),g.math('DIVIDE',p['Depth'],12),1)
-    rotation=g.vector(0,0,capture.outputs['Facing'])
-    pieces=[]
-    for key,toggle in [('Buildings','Buildings'),('Signs','Signs'),('Roofs','Rooftops'),('Street life','Street Life'),('Additions','Rooftops')]:
-        collection=g.node('GeometryNodeCollectionInfo',key)
-        collection.inputs['Collection'].default_value=cols[key]
-        collection.inputs['Separate Children'].default_value=True
-        collection.inputs['Reset Children'].default_value=True
-        instance=g.node('GeometryNodeInstanceOnPoints',key+' on parcels')
-        g.put(points.outputs['Points'],instance.inputs['Points'])
-        g.put(collection.outputs['Instances'],instance.inputs['Instance'])
-        instance.inputs['Pick Instance'].default_value=True
-        g.put(named.outputs['Attribute'],instance.inputs['Instance Index'])
-        g.put(rotation,instance.inputs['Rotation']);g.put(scale,instance.inputs['Scale'])
-        selection=p[toggle] if key=='Buildings' else g.boolean('AND',p[toggle],p['Buildings'])
-        if key=='Additions':selection=g.boolean('AND',selection,g.boolean('AND',addon_probability,g.boolean('NOT',shed_attr.outputs['Attribute'])))
-        g.put(selection,instance.inputs['Selection'])
-        pieces.append(instance.outputs['Instances'])
-    from .infrastructure import infrastructure
-    streets=infrastructure(g,p,origin,px,py,nx,ny,boundary.outputs['Selection'],road_material)
-    grid_join=g.node('GeometryNodeJoinGeometry','Grid district layers')
-    for geom in pieces+streets:g.put(geom,grid_join.inputs['Geometry'])
-    g.section('08 / CURVED STREETS · dual branch (docs/PLAN.md 0.5.0)',(5100,1400))
-    from .roads import curve_district
-    curve_geo,has_curve=curve_district(g,p,cols,p['Geometry'],road_edges.outputs['Selection'],
-                                        boundary.outputs['Selection'],road_material)
-    branch=g.node('GeometryNodeSwitch','Grid or curved streets',input_type='GEOMETRY')
-    g.put(has_curve,branch.inputs['Switch'])
-    g.put(grid_join.outputs[0],branch.inputs['False']);g.put(curve_geo,branch.inputs['True'])
-    g.put(branch.outputs[0],out.inputs[0])
+    from .roads import build_grid_network, curve_district
+    grid_roads=build_grid_network(g,p,origin,sep.outputs['X'],sep.outputs['Y'],px,py)
+    g.section('03–08 / DISTRICT · one road-driven pipeline',(2300,0))
+    district=curve_district(g,p,cols,p['Geometry'],road_edges.outputs['Selection'],
+                            grid_roads,boundary.outputs['Selection'])
+    g.put(district,out.inputs[0])
     tree.use_fake_user=True
     tree.asset_mark()
     tree.asset_data.description=tree.description

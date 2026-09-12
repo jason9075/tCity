@@ -114,8 +114,8 @@ class TCITY_OT_seed(bpy.types.Operator):
 
 
 class TCITY_OT_upgrade(bpy.types.Operator):
-    bl_idname='tcity.upgrade';bl_label='Upgrade District to 0.6';bl_options={'REGISTER','UNDO'}
-    bl_description='保留區域和既有控制值，升級路口與沿街設施（原節點樹仍保留）'
+    bl_idname='tcity.upgrade';bl_label='Upgrade District to 0.7';bl_options={'REGISTER','UNDO'}
+    bl_description='保留區域和既有控制值，升級為單一道路管線（原節點樹仍保留）'
     def execute(self,context):
         mod=district_modifier(context.active_object)
         if not mod:return {'CANCELLED'}
@@ -175,7 +175,8 @@ class TCITY_OT_bake(bpy.types.Operator):
         return {'FINISHED'}
 
 
-LABELS={'Seed':'隨機種子 · Seed','Density':'建築密度','Frontage':'面寬 (m)','Depth':'進深 (m)',
+LABELS={'Seed':'隨機種子 · Seed','Density':'建築密度','Open Spaces':'空置基地再利用','Parking Mix':'停車場比例',
+        'Frontage':'面寬 (m)','Depth':'進深 (m)',
         'Lots per Block':'每排戶數','Road Width':'道路寬度 (m)','Alley Width':'後巷寬度 (m)',
         'Min Floors':'最低樓層','Max Floors':'最高樓層','Townhouse Mix':'第二組住宅立面比例',
         'Boundary Setback':'邊界退縮 (m)','Signs':'店家招牌','Rooftops':'頂樓增建與附加設備',
@@ -195,7 +196,7 @@ class TCITY_PT_panel(bpy.types.Panel):
     bl_space_type='VIEW_3D';bl_region_type='UI';bl_category='TCity'
     def draw(self,context):
         layout=self.layout
-        layout.label(text='TAIWAN STREETS / 0.6',icon='MOD_NODES')
+        layout.label(text='TAIWAN STREETS / 0.7',icon='MOD_NODES')
         layout.operator('tcity.add_demo',text='新增範例街區',icon='ADD')
         layout.operator('tcity.generate',text='從選取區域生成',icon='MESH_GRID')
         mod=district_modifier(context.active_object)
@@ -203,7 +204,7 @@ class TCITY_PT_panel(bpy.types.Panel):
             layout.separator();layout.label(text='選取 XY 平面網格 · 先填面並套用縮放')
             return
         if mod.node_group.name!=GROUP_NAME:
-            layout.operator('tcity.upgrade',text='升級街區 · 道路與沿街設施',icon='FILE_REFRESH')
+            layout.operator('tcity.upgrade',text='升級街區 · 單一道路管線',icon='FILE_REFRESH')
             layout.label(text='升級後保留原本的區域與參數')
             return
         row=layout.row(align=True)
@@ -211,7 +212,7 @@ class TCITY_PT_panel(bpy.types.Panel):
             row.operator('tcity.street_preset',text=label).preset=key
         layout.separator();layout.operator('tcity.next_seed',text='換一個街區變化',icon='FILE_REFRESH')
         box=None
-        headers={'Seed':'生成設定','Frontage':'街廓尺寸','Road Curves':'道路曲線（選配）','Min Floors':'建築組成','Signs':'建築細節','Road Surface':'道路與人行道','Utility Poles':'沿街設施'}
+        headers={'Seed':'生成設定','Open Spaces':'空置基地','Frontage':'街廓尺寸','Road Curves':'道路曲線（選配）','Min Floors':'建築組成','Signs':'建築細節','Road Surface':'道路與人行道','Utility Poles':'沿街設施'}
         display=[s[0] for s in SOCKETS]
         display.remove('Metal Shed Mix');display.insert(display.index('Townhouse Mix')+1,'Metal Shed Mix')
         display.remove('Rooftop Addition Mix');display.insert(display.index('Metal Shed Mix')+1,'Rooftop Addition Mix')
@@ -220,6 +221,7 @@ class TCITY_PT_panel(bpy.types.Panel):
                 box=layout.box();box.label(text=headers[name])
                 if name=='Road Curves':
                     box.label(text='Tab 編輯區域網格內畫游離邊當道路中心線')
+                    box.label(text='未指定時自動使用正交道路網')
             draw_control(box,mod,name,LABELS[name])
         layout.separator();layout.operator('tcity.bake_copy',text='建立實體網格複本',icon='DUPLICATE')
         layout.label(text='Tab 編輯邊界 · Geometry Nodes 可直接修改')

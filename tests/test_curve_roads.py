@@ -1,7 +1,5 @@
-"""Curved road pipeline (docs/PLAN.md §6). Dual branch: mesh-drawn free edges or
-an external Curve object switch on automatically; unspecified curves must keep the
-0.4 grid pipeline byte-identical (checked by test_blender.py / test_infrastructure.py
-already; item 7 here re-confirms it with this file's own fixtures).
+"""Unified road pipeline (docs/PLAN.md §5 0.7). Mesh-drawn free edges or an
+external Curve object override the internal orthogonal centerline network.
 
 Run: blender -b --factory-startup --python-exit-code 1 --python tests/test_curve_roads.py
 """
@@ -41,6 +39,23 @@ def mesh(obj):return obj.evaluated_get(update()).data
 
 def attr(m,name):
     a=m.attributes.get(name);return [d.value for d in a.data] if a else None
+
+
+def face_component_count(m,layer_value):
+    layer=m.attributes.get('tc_layer')
+    faces={face.index for face in m.polygons
+           if layer and all(layer.data[vertex].value==layer_value for vertex in face.vertices)}
+    by_vertex=collections.defaultdict(list)
+    for face_index in faces:
+        for vertex in m.polygons[face_index].vertices:by_vertex[vertex].append(face_index)
+    count=0
+    while faces:
+        count+=1;pending=[faces.pop()]
+        while pending:
+            for vertex in m.polygons[pending.pop()].vertices:
+                for neighbor in by_vertex[vertex]:
+                    if neighbor in faces:faces.remove(neighbor);pending.append(neighbor)
+    return count
 
 
 def instances(obj,kind=None):
@@ -235,14 +250,26 @@ def run():
     set_control(mod,'Seed',seed);assert digest(obj,'Buildings')==a
     record('Determinism','Same seed reproduces evaluated buildings; changing seed changes them')
 
-    # 7. Regression: without any road edges or curve object, output equals grid mode
-    # (test_blender.py / test_infrastructure.py already assert this end-to-end; this
-    # just confirms the branch switch itself picks the grid path).
+    # 7. Without road input, the shared pipeline receives an internal orthogonal
+    # centerline network. Straight grid rows skip the expensive bend step.
     plain=region('Plain grid',[(-40,-40,0),(40,-40,0),(40,40,0),(-40,40,0)],[(0,1,2,3)])
     plain_mod=tcity.district_modifier(plain)
     assert not plain_mod.node_warnings[:]
-    assert digest(plain,'Buildings'),'grid branch produced no buildings'
-    record('Grid regression','No road edges/curve object: grid branch runs and produces buildings, no warnings')
+    assert digest(plain,'Buildings'),'internal road grid produced no buildings'
+    names={node.name for node in plain_mod.node_group.nodes}
+    assert 'Grid or curved streets' not in names
+    assert 'Internal orthogonal road network' in names
+    plain_mesh=mesh(plain);blocks=attr(plain_mesh,'tc_block_id')
+    components=face_component_count(plain_mesh,4)
+    assert blocks and max(blocks)>=3,(set(blocks),components)
+    assert components>=4,components
+    set_control(plain_mod,'Density',0);set_control(plain_mod,'Parking Mix',1)
+    layers=set(attr(mesh(plain),'tc_layer'));assert 5 in layers and 6 not in layers,layers
+    set_control(plain_mod,'Parking Mix',0)
+    layers=set(attr(mesh(plain),'tc_layer'));assert 6 in layers and 5 not in layers,layers
+    set_control(plain_mod,'Open Spaces',False)
+    layers=set(attr(mesh(plain),'tc_layer'));assert 5 not in layers and 6 not in layers,layers
+    record('Unified grid fallback','Internal centerlines split attributed block islands; vacant lots switch deterministically between parking and pocket green')
 
     # 8. Error inputs.
     bad_mesh=bpy.data.meshes.new('Touching2')
