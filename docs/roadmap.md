@@ -23,7 +23,7 @@
 - **已完成（0.7 開發版）**：基地檢查面改用 8 × 8 細分網格，逐面依所屬街廓表面裁切，並把每個 cell 指派給最近的 parcel center，避免多面臨路候選重複占用；窄街廓、斜邊與區域邊緣會顯示小於 `Frontage × Depth` 的不規則輪廓，同時保留 `tc_parcel_id`／`tc_block_id`。建築與空地仍只使用通過完整容納檢查的基地。
 - 開發版限制：內建正交路口的顯示網格暫時保留同高道路斷面重疊，避免 Blender 5.2 的非凸斷面 self-union 把抬高路緣壓平；街廓切割改用獨立凸形刀具，不受此限制。
 - 將目前的細分近似輪廓收斂成精確梯形／任意多邊形地籍。
-- **已完成（0.7 開發版）**：每個基地中心向來源區域 Mesh 取樣同名 face attribute／vertex group；`tc_zone_vacancy` 在全域 `Density` 下增加局部空置率，`tc_zone_min_floors`／`tc_zone_max_floors` 覆寫 2–7 層範圍，`tc_zone_facade_mix` 覆寫第二組住宅立面比例。`tc_zone_commercial` 依既有資產是否真的包含一樓店面／招牌分組，`tc_zone_era` 依老舊粉刷／磚面與較新磁磚／馬賽克分組；缺少屬性則回退原本全域值與隨機分布。這是六種既有街屋立面的語意分區，不代表已有大型商場或歷史建築專用資產。
+- **已完成（0.7 開發版）**：每個基地中心向來源區域 Mesh 取樣同名 face attribute／vertex group；`tc_zone_vacancy` 在全域 `Density` 下增加局部空置率，Weight Paint 用的 `tc_zone_height` 把 0–1 映射為固定 2–7 層並優先於絕對 `tc_zone_min_floors`／`tc_zone_max_floors`，`tc_zone_facade_mix` 覆寫第二組住宅立面比例。`tc_zone_commercial` 依既有資產是否真的包含一樓店面／招牌分組，`tc_zone_era` 依老舊粉刷／磚面與較新磁磚／馬賽克分組；缺少屬性則回退原本全域值與隨機分布。這是六種既有街屋立面的語意分區，不代表已有大型商場或歷史建築專用資產。
 - 坡地處理、地形標高取樣、騎樓高程連續性與建築底座。
 
 ## 資產規模與輸出

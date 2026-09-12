@@ -704,6 +704,14 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
 
     zone_min,_=_sample_region_float(g,region_geo,zone_position,'tc_zone_min_floors',p['Min Floors'],'Sample local minimum floors')
     zone_max,_=_sample_region_float(g,region_geo,zone_position,'tc_zone_max_floors',p['Max Floors'],'Sample local maximum floors')
+    height,height_exists=_sample_region_float(g,region_geo,zone_position,'tc_zone_height',0,'Sample normalized local height')
+    height=g.math('MINIMUM',g.math('MAXIMUM',height,0),1)
+    height_floors=g.math('ROUND',g.math('ADD',2,g.math('MULTIPLY',height,5)))
+    height_min=g.node('GeometryNodeSwitch','Painted or minimum floors',input_type='FLOAT')
+    g.put(height_exists,height_min.inputs['Switch']);g.put(zone_min,height_min.inputs['False']);g.put(height_floors,height_min.inputs['True'])
+    height_max=g.node('GeometryNodeSwitch','Painted or maximum floors',input_type='FLOAT')
+    g.put(height_exists,height_max.inputs['Switch']);g.put(zone_max,height_max.inputs['False']);g.put(height_floors,height_max.inputs['True'])
+    zone_min=height_min.outputs[0];zone_max=height_max.outputs[0]
     zone_min=g.math('ROUND',g.math('MINIMUM',g.math('MAXIMUM',zone_min,2),7))
     zone_max=g.math('ROUND',g.math('MINIMUM',g.math('MAXIMUM',zone_max,2),7))
     floors=g.random('INT',g.math('MINIMUM',zone_min,zone_max),g.math('MAXIMUM',zone_min,zone_max),p['Seed'],site_id,101)
@@ -758,7 +766,8 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     geo=points
     for name,value,dtype in [('tc_parcel_id',site_id,'INT'),('tc_floors',floors,'INT'),('tc_asset',asset,'INT'),
                               ('tc_is_shed',is_shed,'BOOLEAN'),('tc_occupied',occupied,'BOOLEAN'),
-                              ('tc_zone_vacancy',vacancy,'FLOAT'),('tc_zone_min_floors',zone_min,'FLOAT'),
+                              ('tc_zone_vacancy',vacancy,'FLOAT'),('tc_zone_height',height,'FLOAT'),
+                              ('tc_zone_min_floors',zone_min,'FLOAT'),
                               ('tc_zone_max_floors',zone_max,'FLOAT'),('tc_zone_facade_mix',facade_mix,'FLOAT'),
                               ('tc_zone_commercial',commercial,'FLOAT'),('tc_zone_era',era,'FLOAT')]:
         geo=_store(g,geo,name,value,dtype)

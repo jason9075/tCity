@@ -327,8 +327,10 @@ def run():
     vacancy.add([0,1,2,3],1,'REPLACE')
     assert not digest(zoned,'Buildings')
     vacancy.add([0,1,2,3],0,'REPLACE')
-    face_attribute(zoned,'tc_zone_min_floors',7)
-    face_attribute(zoned,'tc_zone_max_floors',7)
+    height=zoned.vertex_groups.new(name='tc_zone_height')
+    height.add([0,1,2,3],1,'REPLACE')
+    face_attribute(zoned,'tc_zone_min_floors',6)
+    face_attribute(zoned,'tc_zone_max_floors',6)
     face_attribute(zoned,'tc_zone_facade_mix',1)
     commercial=face_attribute(zoned,'tc_zone_commercial',1)
     era=face_attribute(zoned,'tc_zone_era',1)
@@ -337,9 +339,10 @@ def run():
     zoned_names=[name for name,_ in zoned_buildings]
     assert all('_Buildings_7F_' in name for name in zoned_names),set(zoned_names)
     assert all(int(name.rsplit('_',1)[1])==0 for name in zoned_names),set(zoned_names)
+    zoned.vertex_groups.remove(height)
     commercial.data[0].value=0;era.data[0].value=0;zoned.data.update()
     old_homes=digest(zoned,'Buildings')
-    assert old_homes and all(int(name.rsplit('_',1)[1])==2 for name,_ in old_homes),{name for name,_ in old_homes}
+    assert old_homes and all('_Buildings_6F_2' in name for name,_ in old_homes),{name for name,_ in old_homes}
     record('Regional zoning attributes','Vertex-group vacancy and face attributes override density, floors, facade mix, shopfront use and facade era')
 
     # 10. Error inputs.

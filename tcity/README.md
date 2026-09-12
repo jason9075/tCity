@@ -18,7 +18,7 @@ Geometry Nodes 即時配置道路與建築；同一檔案多個區域共用原�
 
 一般沿街基地現在直接從殘餘街廓的臨路頂邊抽取 frontage，不再固定從道路中心線向兩側建立候選排。系統沿 frontage 生成 `Frontage × Depth` 的矩形基地面、向街廓內退入半個 `Depth`，並直接繼承 `tc_block_id`；建築與空地由基地面中心生成。開啟 `Parcel Guides` 會顯示 `tc_layer = 7` 的 8 × 8 細分基地面，超出所屬街廓的 cell 會被刪除，重疊 cell 只保留給最近基地，因此窄街廓或斜邊可呈現不規則近似輪廓。若 Blender 的複合路口布林結果沒有街廓頂面，會自動回退中心線排；轉角雙立面也仍使用專用中心線判定。精確梯形／任意多邊形地籍尚待完成。
 
-區域網格可用同名 Mesh face attribute 或 vertex group 繪製局部配置；每個基地會在中心位置向來源面取樣。`tc_zone_vacancy`（0–1）在全域 `Density` 之下增加空置率，`tc_zone_min_floors`／`tc_zone_max_floors` 覆寫該區樓層範圍（自動限制並取整至 2–7），`tc_zone_facade_mix`（0–1）覆寫第二組住宅立面比例。`tc_zone_commercial`（0–1）控制帶店面與招牌的一樓比例；`tc_zone_era`（0–1）由老舊粉刷／磚面漸變到較新磁磚／馬賽克立面。缺少任一屬性時沿用原本全域控制與隨機資產分布；商業／年代目前是既有六種立面的分組選擇，尚非獨立的大型商場或歷史建築資產。
+區域網格可用同名 Mesh face attribute 或 vertex group 繪製局部配置；每個基地會在中心位置向來源面取樣。`tc_zone_vacancy`（0–1）在全域 `Density` 之下增加空置率；Weight Paint 用的 `tc_zone_height` 把 0–1 映射為固定 2–7 層，並優先於供 face attribute 使用的絕對 `tc_zone_min_floors`／`tc_zone_max_floors`。`tc_zone_facade_mix`（0–1）覆寫第二組住宅立面比例，`tc_zone_commercial`（0–1）控制帶店面與招牌的一樓比例；`tc_zone_era`（0–1）由老舊粉刷／磚面漸變到較新磁磚／馬賽克立面。缺少任一屬性時沿用原本全域控制與隨機資產分布；商業／年代目前是既有六種立面的分組選擇，尚非獨立的大型商場或歷史建築資產。
 
 這是朝寫實方向開發的程序化原型，並非掃描資產或照片級資產庫，亦非 iCity 官方產品。程式與原創模型 GPL-3.0-or-later；招牌字型 SIL OFL（fonts/OFL.txt）；Poly Haven 照明 HDRI 為 CC0（environment/CREDITS.txt）。
 
