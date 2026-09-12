@@ -66,7 +66,7 @@ def _sample_region_float(g,region_geo,position,name,fallback,label=''):
     chosen=g.node('GeometryNodeSwitch',f'{name} or global control',input_type='FLOAT')
     g.put(exists.outputs['Value'],chosen.inputs['Switch']);g.put(fallback,chosen.inputs['False'])
     g.put(sample.outputs['Value'],chosen.inputs['True'])
-    return chosen.outputs[0]
+    return chosen.outputs[0],exists.outputs['Value']
 
 
 def _enabled(node,name):
@@ -607,7 +607,7 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     g.put(centerline_id,prox_own.inputs['Group ID']);g.put(own_id,prox_own.inputs['Sample Group ID'])
     own_is_nearest=True if block_frontage else g.math('LESS_THAN',prox_own.outputs['Distance'],g.math('ADD',prox_any.outputs['Distance'],.05))
     zone_position=g.vmath('ADD',pos,_scale(g,facing,g.math('MULTIPLY',p['Depth'],.5)))
-    vacancy=_sample_region_float(g,region_geo,zone_position,'tc_zone_vacancy',0,'Sample local vacancy')
+    vacancy,_=_sample_region_float(g,region_geo,zone_position,'tc_zone_vacancy',0,'Sample local vacancy')
     vacancy=g.math('MINIMUM',g.math('MAXIMUM',vacancy,0),1)
     local_density=g.math('MULTIPLY',p['Density'],g.math('SUBTRACT',1,vacancy))
     occupied=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,43),local_density)
@@ -702,16 +702,43 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
         valid_normal=g.boolean('AND',valid_normal,normal_sites)
     if not block_frontage:candidate_normal=valid_normal
 
-    zone_min=_sample_region_float(g,region_geo,zone_position,'tc_zone_min_floors',p['Min Floors'],'Sample local minimum floors')
-    zone_max=_sample_region_float(g,region_geo,zone_position,'tc_zone_max_floors',p['Max Floors'],'Sample local maximum floors')
+    zone_min,_=_sample_region_float(g,region_geo,zone_position,'tc_zone_min_floors',p['Min Floors'],'Sample local minimum floors')
+    zone_max,_=_sample_region_float(g,region_geo,zone_position,'tc_zone_max_floors',p['Max Floors'],'Sample local maximum floors')
     zone_min=g.math('ROUND',g.math('MINIMUM',g.math('MAXIMUM',zone_min,2),7))
     zone_max=g.math('ROUND',g.math('MINIMUM',g.math('MAXIMUM',zone_max,2),7))
     floors=g.random('INT',g.math('MINIMUM',zone_min,zone_max),g.math('MAXIMUM',zone_min,zone_max),p['Seed'],site_id,101)
-    facade_mix=_sample_region_float(g,region_geo,zone_position,'tc_zone_facade_mix',p['Townhouse Mix'],'Sample local facade mix')
+    facade_mix,_=_sample_region_float(g,region_geo,zone_position,'tc_zone_facade_mix',p['Townhouse Mix'],'Sample local facade mix')
     facade_mix=g.math('MINIMUM',g.math('MAXIMUM',facade_mix,0),1)
     typ=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,307),facade_mix)
     palette=g.random('INT',0,2,p['Seed'],site_id,701)
-    asset=g.math('ADD',g.math('MULTIPLY',g.math('SUBTRACT',floors,2),6),g.math('ADD',g.math('MULTIPLY',typ,3),palette))
+    variant=g.math('ADD',g.math('MULTIPLY',typ,3),palette)
+    # The authored variants have real semantic differences: 0/3/5 contain a
+    # recessed ground-floor shop and signage; 0/1/4 use tile/mosaic finishes,
+    # while 2/3/5 use aged plaster, oxide tile or ochre plaster. Optional zoning
+    # fields select within those sets; with neither field present the original
+    # variant remains byte-for-byte equivalent to the pre-zoning choice.
+    base_commercial=g.boolean('OR',g.boolean('OR',g.equal(variant,0,.01),g.equal(variant,3,.01)),g.equal(variant,5,.01))
+    base_newer=g.boolean('OR',g.boolean('OR',g.equal(variant,0,.01),g.equal(variant,1,.01)),g.equal(variant,4,.01))
+    commercial,commercial_exists=_sample_region_float(g,region_geo,zone_position,'tc_zone_commercial',base_commercial,'Sample local commercial mix')
+    era,era_exists=_sample_region_float(g,region_geo,zone_position,'tc_zone_era',base_newer,'Sample local facade era')
+    commercial=g.math('MINIMUM',g.math('MAXIMUM',commercial,0),1)
+    era=g.math('MINIMUM',g.math('MAXIMUM',era,0),1)
+    commercial_pick=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,733),commercial)
+    newer_pick=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,739),era)
+    alternate=g.random('INT',0,1,p['Seed'],site_id,743)
+    old_shop=_index_switch(g,alternate,'INT',[3,5],'Old shop variants')
+    new_home=_index_switch(g,alternate,'INT',[1,4],'Newer residential variants')
+    shop_variant=g.node('GeometryNodeSwitch','Old or newer shopfront',input_type='INT')
+    g.put(newer_pick,shop_variant.inputs['Switch']);g.put(old_shop,shop_variant.inputs['False']);shop_variant.inputs['True'].default_value=0
+    home_variant=g.node('GeometryNodeSwitch','Old or newer residential facade',input_type='INT')
+    g.put(newer_pick,home_variant.inputs['Switch']);home_variant.inputs['False'].default_value=2;g.put(new_home,home_variant.inputs['True'])
+    semantic_variant=g.node('GeometryNodeSwitch','Commercial or residential facade',input_type='INT')
+    g.put(commercial_pick,semantic_variant.inputs['Switch']);g.put(home_variant.outputs[0],semantic_variant.inputs['False']);g.put(shop_variant.outputs[0],semantic_variant.inputs['True'])
+    zoning_active=g.boolean('OR',commercial_exists,era_exists)
+    zoned_variant=g.node('GeometryNodeSwitch','Use semantic zoning',input_type='INT')
+    g.put(zoning_active,zoned_variant.inputs['Switch']);g.put(variant,zoned_variant.inputs['False']);g.put(semantic_variant.outputs[0],zoned_variant.inputs['True'])
+    variant=zoned_variant.outputs[0]
+    asset=g.math('ADD',g.math('MULTIPLY',g.math('SUBTRACT',floors,2),6),variant)
     is_shed=g.boolean('OR',g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,1103),p['Metal Shed Mix']),
                        g.math('GREATER_THAN',p['Metal Shed Mix'],.999999))
     is_shed=g.boolean('AND',is_shed,g.boolean('NOT',corner_ok))
@@ -732,7 +759,8 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     for name,value,dtype in [('tc_parcel_id',site_id,'INT'),('tc_floors',floors,'INT'),('tc_asset',asset,'INT'),
                               ('tc_is_shed',is_shed,'BOOLEAN'),('tc_occupied',occupied,'BOOLEAN'),
                               ('tc_zone_vacancy',vacancy,'FLOAT'),('tc_zone_min_floors',zone_min,'FLOAT'),
-                              ('tc_zone_max_floors',zone_max,'FLOAT'),('tc_zone_facade_mix',facade_mix,'FLOAT')]:
+                              ('tc_zone_max_floors',zone_max,'FLOAT'),('tc_zone_facade_mix',facade_mix,'FLOAT'),
+                              ('tc_zone_commercial',commercial,'FLOAT'),('tc_zone_era',era,'FLOAT')]:
         geo=_store(g,geo,name,value,dtype)
     centered=g.node('GeometryNodeSetPosition',f'Parcel centers behind frontage {side:+d}')
     g.put(geo,centered.inputs['Geometry']);g.put(_scale(g,facing,g.math('MULTIPLY',p['Depth'],.5)),centered.inputs['Offset'])

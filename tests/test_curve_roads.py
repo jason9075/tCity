@@ -330,12 +330,17 @@ def run():
     face_attribute(zoned,'tc_zone_min_floors',7)
     face_attribute(zoned,'tc_zone_max_floors',7)
     face_attribute(zoned,'tc_zone_facade_mix',1)
+    commercial=face_attribute(zoned,'tc_zone_commercial',1)
+    era=face_attribute(zoned,'tc_zone_era',1)
     zoned_buildings=digest(zoned,'Buildings')
     assert zoned_buildings
     zoned_names=[name for name,_ in zoned_buildings]
     assert all('_Buildings_7F_' in name for name in zoned_names),set(zoned_names)
-    assert all(int(name.rsplit('_',1)[1])>=3 for name in zoned_names),set(zoned_names)
-    record('Regional zoning attributes','Vertex-group vacancy and face attributes override density, floors and facade mix at parcel centers')
+    assert all(int(name.rsplit('_',1)[1])==0 for name in zoned_names),set(zoned_names)
+    commercial.data[0].value=0;era.data[0].value=0;zoned.data.update()
+    old_homes=digest(zoned,'Buildings')
+    assert old_homes and all(int(name.rsplit('_',1)[1])==2 for name,_ in old_homes),{name for name,_ in old_homes}
+    record('Regional zoning attributes','Vertex-group vacancy and face attributes override density, floors, facade mix, shopfront use and facade era')
 
     # 10. Error inputs.
     bad_mesh=bpy.data.meshes.new('Touching2')
