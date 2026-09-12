@@ -522,6 +522,34 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     # closer to, 0=start/1=end, needed once past CurveToPoints below (see the
     # handedness comment further down).
     tagged=_store(g,tagged,'tc_site_factor',param.outputs['Factor'],'FLOAT')
+    site_index=g.node('GeometryNodeInputIndex').outputs[0]
+    previous=g.node('GeometryNodeOffsetPointInCurve','Previous lot tangent')
+    g.put(site_index,previous.inputs['Point Index']);previous.inputs['Offset'].default_value=-1
+    following=g.node('GeometryNodeOffsetPointInCurve','Next lot tangent')
+    g.put(site_index,following.inputs['Point Index']);following.inputs['Offset'].default_value=1
+    previous_position=g.node('GeometryNodeSampleIndex','Sample previous lot position',data_type='FLOAT_VECTOR',domain='POINT')
+    g.put(tagged,previous_position.inputs['Geometry']);g.put(site_pos,_enabled(previous_position,'Value'))
+    g.put(previous.outputs['Point Index'],previous_position.inputs['Index'])
+    following_position=g.node('GeometryNodeSampleIndex','Sample next lot position',data_type='FLOAT_VECTOR',domain='POINT')
+    g.put(tagged,following_position.inputs['Geometry']);g.put(site_pos,_enabled(following_position,'Value'))
+    g.put(following.outputs['Point Index'],following_position.inputs['Index'])
+    incoming=g.node('ShaderNodeVectorMath',operation='NORMALIZE')
+    g.put(g.vmath('SUBTRACT',site_pos,previous_position.outputs['Value']),incoming.inputs[0])
+    outgoing=g.node('ShaderNodeVectorMath',operation='NORMALIZE')
+    g.put(g.vmath('SUBTRACT',following_position.outputs['Value'],site_pos),outgoing.inputs[0])
+    tangent_dot=_dot(g,incoming.outputs['Vector'],outgoing.outputs['Vector'])
+    bent_angle=g.math('MINIMUM',g.math('DIVIDE',g.math('MULTIPLY',p['Frontage'],2),p['Depth']),1.570796)
+    # Across the previous/current/next sites the measured turn is about twice
+    # the per-lot angle. For rigid assets, Depth * angle/2 <= 0.3 m keeps the
+    # estimated rear-edge mismatch within the roadmap's tolerance. Bent assets
+    # stay valid until the curve radius approaches one lot depth.
+    rigid_angle=g.math('DIVIDE',.6,p['Depth'])
+    allowed_angle=g.node('GeometryNodeSwitch','Bent or rigid curvature allowance',input_type='FLOAT')
+    g.put(bend_buildings,allowed_angle.inputs['Switch'])
+    g.put(rigid_angle,allowed_angle.inputs['False']);g.put(bent_angle,allowed_angle.inputs['True'])
+    tight_curve=g.boolean('AND',g.boolean('AND',previous.outputs['Is Valid Offset'],following.outputs['Is Valid Offset']),
+                          g.math('LESS_THAN',tangent_dot,g.math('COSINE',allowed_angle.outputs[0])))
+    tagged=_store(g,tagged,'tc_site_tight_curve',tight_curve,'BOOLEAN')
     topoints=g.node('GeometryNodeCurveToPoints',f'Building line lots {side:+d}',mode='EVALUATED')
     g.put(tagged,topoints.inputs['Curve'])
     points=topoints.outputs['Points']
@@ -636,10 +664,14 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     corner_fits=_inside(g,p,region_geo,boundary_sel,pushed_corner_pos,corner_radius)
     corner_ok=g.boolean('AND',corner_ok,corner_fits)
 
-    choose_normal=g.boolean('AND',g.boolean('AND',g.boolean('AND',inside,own_is_nearest),occupied),
+    tight_curve=_named(g,'tc_site_tight_curve','BOOLEAN')
+    curvature_skip=g.boolean('AND',g.boolean('AND',g.boolean('AND',tight_curve,inside),own_is_nearest),
                              g.boolean('NOT',near_junction))
-    vacant=g.boolean('AND',g.boolean('AND',g.boolean('AND',inside,own_is_nearest),g.boolean('NOT',occupied)),
-                     g.boolean('NOT',near_junction))
+    safe_curve=g.boolean('NOT',tight_curve)
+    choose_normal=g.boolean('AND',g.boolean('AND',g.boolean('AND',g.boolean('AND',inside,own_is_nearest),occupied),
+                                            g.boolean('NOT',near_junction)),safe_curve)
+    vacant=g.boolean('AND',g.boolean('AND',g.boolean('AND',g.boolean('AND',inside,own_is_nearest),g.boolean('NOT',occupied)),
+                                     g.boolean('NOT',near_junction)),safe_curve)
 
     floors=g.random('INT',g.math('MINIMUM',p['Min Floors'],p['Max Floors']),g.math('MAXIMUM',p['Min Floors'],p['Max Floors']),p['Seed'],site_id,101)
     typ=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,307),p['Townhouse Mix'])
@@ -730,7 +762,10 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     green_selection=g.boolean('AND',g.boolean('AND',vacant,g.boolean('NOT',parking_pick)),open_on)
     open_spaces=[_instance(g,geo,parking_asset,parking_selection,align.outputs['Rotation'],label=f'Parking lots {side:+d}',realize=True),
                  _instance(g,geo,green_asset,green_selection,align.outputs['Rotation'],label=f'Pocket greens {side:+d}',realize=True)]
-    return _bend(g,dense_side,normal_pieces,side,bend_buildings)+corner_pieces+open_spaces
+    skipped=g.node('GeometryNodeSeparateGeometry',f'Unsafe curvature sites {side:+d}',domain='POINT')
+    g.put(geo,skipped.inputs['Geometry']);g.put(curvature_skip,skipped.inputs['Selection'])
+    has_skipped=g.math('GREATER_THAN',_point_count(g,skipped.outputs['Selection']),0)
+    return _bend(g,dense_side,normal_pieces,side,bend_buildings)+corner_pieces+open_spaces,has_skipped
 
 
 def _bend(g,frontage_curve,pieces,side,bend_buildings):
@@ -783,10 +818,11 @@ def build_sites(g,p,cols,region_geo,boundary_sel,centerline,junction_points,bend
     # a raw curve, so realize the centerline's own points once for the group-id check.
     centerline_pts=g.node('GeometryNodeCurveToPoints','Centerline points for proximity',mode='EVALUATED')
     g.put(centerline,centerline_pts.inputs['Curve'])
-    pieces=[]
+    pieces=[];curvature_warning=False
     for side in (1,-1):
-        pieces+=_place_side(g,p,cols,region_geo,boundary_sel,centerline_pts.outputs['Points'],dense_geo,junction_points,side,bend_buildings)
-    return pieces
+        side_pieces,side_warning=_place_side(g,p,cols,region_geo,boundary_sel,centerline_pts.outputs['Points'],dense_geo,junction_points,side,bend_buildings)
+        pieces+=side_pieces;curvature_warning=g.boolean('OR',curvature_warning,side_warning)
+    return pieces,curvature_warning
 
 
 # ---------------------------------------------------------- 4.5 street furniture
@@ -960,7 +996,9 @@ def curve_district(g,p,cols,region_geo,road_mesh_geo,grid_road_mesh_geo,boundary
     g.put(empty,surface_junctions.inputs['False']);g.put(junction_points,surface_junctions.inputs['True'])
     surface_has_junctions=g.boolean('AND',has_junctions,has_user_roads)
     surface,half,outer=build_surface(g,p,centerline,surface_junctions.outputs[0],surface_has_junctions,curve_road_material)
-    sites=build_sites(g,p,cols,region_geo,boundary_sel,centerline,junction_points,bend_buildings)
+    sites,curvature_warning=build_sites(g,p,cols,region_geo,boundary_sel,centerline,junction_points,bend_buildings)
     furniture=build_furniture(g,p,region_geo,boundary_sel,centerline)
     wires=build_wires(g,p,region_geo,boundary_sel,centerline,junction_points)
-    return _join(g,surface+sites+furniture+wires,'Unified district layers')
+    warned_surface=[_store(g,geometry,'tc_curvature_warning',curvature_warning,'BOOLEAN',label='Store curvature warning')
+                    for geometry in surface]
+    return _join(g,warned_surface+sites+furniture+wires,'Unified district layers')

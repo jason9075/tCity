@@ -24,6 +24,18 @@ def district_modifier(obj):
                      m.node_group.name.startswith('TCity • Taiwan District')),None)
 
 
+def curvature_warning(context,obj):
+    """Read the GN-authored warning flag without duplicating curvature math in UI."""
+    try:
+        evaluated=obj.evaluated_get(context.evaluated_depsgraph_get())
+        attribute=evaluated.data.attributes.get('tc_curvature_warning')
+        if not attribute:return False
+        values=bytearray(len(attribute.data));attribute.data.foreach_get('value',values)
+        return any(values)
+    except (AttributeError,ReferenceError,RuntimeError):
+        return False
+
+
 def validate_region(obj):
     if not obj or obj.type!='MESH': return 'Select a filled mesh region / 請選擇有面的平面網格'
     mesh=obj.data
@@ -223,6 +235,10 @@ class TCITY_PT_panel(bpy.types.Panel):
                     box.label(text='Tab 編輯區域網格內畫游離邊當道路中心線')
                     box.label(text='未指定時自動使用正交道路網')
             draw_control(box,mod,name,LABELS[name])
+        if curvature_warning(context,context.active_object):
+            warning=layout.box();warning.alert=True
+            warning.label(text='彎道過急：已略過無法安全容納的基地',icon='ERROR')
+            warning.label(text='可放緩道路曲線，或開啟街屋沿曲線彎折')
         layout.separator();layout.operator('tcity.bake_copy',text='建立實體網格複本',icon='DUPLICATE')
         layout.label(text='Tab 編輯邊界 · Geometry Nodes 可直接修改')
 

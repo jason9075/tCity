@@ -250,7 +250,27 @@ def run():
     set_control(mod,'Seed',seed);assert digest(obj,'Buildings')==a
     record('Determinism','Same seed reproduces evaluated buildings; changing seed changes them')
 
-    # 7. Without road input, the shared pipeline receives an internal orthogonal
+    # 7. A degree-2 sharp bend is not a junction, but still cannot safely hold
+    # rigid frontage modules. The GN flag drives the sidebar warning.
+    boundary=[(-60,-60,0),(60,-60,0),(60,60,0),(-60,60,0)]
+    tight=region('Tight curve',boundary+[(-30,0,0),(0,0,0),(0,30,0)],[(0,1,2,3)],[(4,5),(5,6)])
+    tight_mod=tcity.district_modifier(tight)
+    set_control(tight_mod,'Smooth Streets',False);set_control(tight_mod,'Density',1)
+    set_control(tight_mod,'Bend Buildings to Curve',False);set_control(tight_mod,'Corner Buildings',False)
+    tight_buildings=len(digest(tight,'Buildings'))
+    warning=attr(mesh(tight),'tc_curvature_warning')
+    assert warning and any(warning) and tcity.curvature_warning(bpy.context,tight),set(warning or [])
+    straight=region('Straight comparison',boundary+[(-30,0,0),(30,0,0)],[(0,1,2,3)],[(4,5)])
+    straight_mod=tcity.district_modifier(straight)
+    set_control(straight_mod,'Smooth Streets',False);set_control(straight_mod,'Density',1)
+    set_control(straight_mod,'Bend Buildings to Curve',False)
+    straight_buildings=len(digest(straight,'Buildings'))
+    straight_warning=attr(mesh(straight),'tc_curvature_warning')
+    assert straight_warning and not any(straight_warning) and not tcity.curvature_warning(bpy.context,straight)
+    assert 0<tight_buildings<straight_buildings,(tight_buildings,straight_buildings)
+    record('Curvature safety','Sharp degree-2 bends skip unsafe lots and expose the sidebar warning; a straight road does neither')
+
+    # 8. Without road input, the shared pipeline receives an internal orthogonal
     # centerline network. Straight grid rows skip the expensive bend step.
     plain=region('Plain grid',[(-40,-40,0),(40,-40,0),(40,40,0),(-40,40,0)],[(0,1,2,3)])
     plain_mod=tcity.district_modifier(plain)
@@ -271,7 +291,7 @@ def run():
     layers=set(attr(mesh(plain),'tc_layer'));assert 5 not in layers and 6 not in layers,layers
     record('Unified grid fallback','Internal centerlines split attributed block islands; vacant lots switch deterministically between parking and pocket green')
 
-    # 8. Error inputs.
+    # 9. Error inputs.
     bad_mesh=bpy.data.meshes.new('Touching2')
     bad_mesh.from_pydata([(0,0,0),(50,0,0),(50,50,0),(0,50,0),(25,25,0)],[(0,4)],[(0,1,2,3)])
     bad_mesh.update()
@@ -292,7 +312,7 @@ def run():
     assert validate_road_curve(obj,curve_obj) is None
     record('Error inputs','validate_region rejects boundary-touching road edges and overlong centerlines; validate_road_curve rejects self-reference and non-curve objects')
 
-    # 9. Boundary detection unaffected by the presence of road edges.
+    # 10. Boundary detection unaffected by the presence of road edges.
     l_no_road=region('L no road',[(0,0,0),(110,0,0),(110,42,0),(48,42,0),(48,105,0),(0,105,0)],[(0,1,2,3,4,5)])
     l_with_road=region('L with road',[(0,0,0),(110,0,0),(110,42,0),(48,42,0),(48,105,0),(0,105,0),
                                        (10,10,0),(40,90,0)],[(0,1,2,3,4,5)],[(6,7)])
@@ -302,7 +322,7 @@ def run():
             assert inside(vert.co.x,vert.co.y),(label,tuple(vert.co))
     record('Boundary detection','Face Count == 1 boundary selection is unaffected by drawn road edges on the same L-shaped region')
 
-    # 10. Mesh-drawn edges vs an external Curve object give equivalent output.
+    # 11. Mesh-drawn edges vs an external Curve object give equivalent output.
     # Reuse the gentle centerline (item 2): the tight S-curve above sits right at
     # the edge of geometric degeneracy for its own profile width (already visible
     # as non-manifold edges when checked directly), which makes the EXACT boolean
