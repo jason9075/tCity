@@ -14,7 +14,9 @@ Blender 5.2 LTS extension。Preferences → Get Extensions → Install from Disk
 
 Geometry Nodes 即時配置道路與建築；同一檔案多個區域共用原創資產。平面區域可含凹角及真正留空的孔洞，使用前套用縮放。建議 100–200 m 區域，新增區域最大 1,000 m；道路中心線總長上限 5,000 m。尚無坡地；近似直角路口的轉角基地會放上簡化的轉角雙立面建築（見 0.6.3），其他角度仍留空地。
 
-0.7 開發版的內建道路會切開殘餘地面，每個連通街廓寫入 `tc_block_id`。`Open Spaces` 預設開啟，會把通過完整基地容納檢查但未抽中建築的沿街基地改成停車場（`tc_layer = 5`）或口袋綠地（`tc_layer = 6`）；`Parking Mix` 控制兩者比例。任意街廓內部尚未做面式地籍切分。
+0.7 開發版的內建道路會切開殘餘地面，每個連通街廓寫入 `tc_block_id`。`Open Spaces` 預設開啟，會把通過完整基地容納檢查但未抽中建築的沿街基地改成停車場（`tc_layer = 5`）或口袋綠地（`tc_layer = 6`）；`Parking Mix` 控制兩者比例。依街廓裁切的任意形狀地籍仍待完成。
+
+一般沿街基地現在直接從殘餘街廓的臨路頂邊抽取 frontage，不再固定從道路中心線向兩側建立候選排。系統沿 frontage 生成 `Frontage × Depth` 的矩形基地面、向街廓內退入半個 `Depth`，並直接繼承 `tc_block_id`；建築與空地由基地面中心生成。開啟 `Parcel Guides` 可顯示 `tc_layer = 7` 的基地面。若 Blender 的複合路口布林結果沒有街廓頂面，會自動回退中心線排；轉角雙立面也仍使用專用中心線判定。基地尚未依不規則街廓邊界裁成梯形或任意形狀。
 
 這是朝寫實方向開發的程序化原型，並非掃描資產或照片級資產庫，亦非 iCity 官方產品。程式與原創模型 GPL-3.0-or-later；招牌字型 SIL OFL（fonts/OFL.txt）；Poly Haven 照明 HDRI 為 CC0（environment/CREDITS.txt）。
 

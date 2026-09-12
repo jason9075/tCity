@@ -188,6 +188,7 @@ class TCITY_OT_bake(bpy.types.Operator):
 
 
 LABELS={'Seed':'隨機種子 · Seed','Density':'建築密度','Open Spaces':'空置基地再利用','Parking Mix':'停車場比例',
+        'Parcel Guides':'顯示基地面',
         'Frontage':'面寬 (m)','Depth':'進深 (m)',
         'Lots per Block':'每排戶數','Road Width':'道路寬度 (m)','Alley Width':'後巷寬度 (m)',
         'Min Floors':'最低樓層','Max Floors':'最高樓層','Townhouse Mix':'第二組住宅立面比例',
@@ -224,7 +225,7 @@ class TCITY_PT_panel(bpy.types.Panel):
             row.operator('tcity.street_preset',text=label).preset=key
         layout.separator();layout.operator('tcity.next_seed',text='換一個街區變化',icon='FILE_REFRESH')
         box=None
-        headers={'Seed':'生成設定','Open Spaces':'空置基地','Frontage':'街廓尺寸','Road Curves':'道路曲線（選配）','Min Floors':'建築組成','Signs':'建築細節','Road Surface':'道路與人行道','Utility Poles':'沿街設施'}
+        headers={'Seed':'生成設定','Open Spaces':'空置基地','Parcel Guides':'基地檢查','Frontage':'街廓尺寸','Road Curves':'道路曲線（選配）','Min Floors':'建築組成','Signs':'建築細節','Road Surface':'道路與人行道','Utility Poles':'沿街設施'}
         display=[s[0] for s in SOCKETS]
         display.remove('Metal Shed Mix');display.insert(display.index('Townhouse Mix')+1,'Metal Shed Mix')
         display.remove('Rooftop Addition Mix');display.insert(display.index('Metal Shed Mix')+1,'Rooftop Addition Mix')

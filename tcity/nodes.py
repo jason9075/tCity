@@ -117,6 +117,7 @@ SOCKETS = [
     ('Density','NodeSocketFloat',.94,0,1,'Probability of occupied lots / 建築密度'),
     ('Open Spaces','NodeSocketBool',True,None,None,'Convert vacant valid lots to parking or pocket green / 空置基地轉為停車場或口袋綠地'),
     ('Parking Mix','NodeSocketFloat',.55,0,1,'Share of open lots used for parking; remainder becomes green / 空地中的停車場比例'),
+    ('Parcel Guides','NodeSocketBool',False,None,None,'Show generated parcel faces for inspection / 顯示程序基地面供檢查'),
     ('Frontage','NodeSocketFloat',7.2,5.2,10,'Lot frontage in metres / 面寬'),
     ('Depth','NodeSocketFloat',14,9,18,'Lot depth in metres / 進深'),
     ('Lots per Block','NodeSocketInt',4,2,10,'Shopfronts along each side / 每排戶數'),

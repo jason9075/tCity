@@ -135,7 +135,7 @@ def run():
     # rows 0-2, i.e. flat indices 3, 7, 11 (indices 12-14 are the affine bottom row).
     def translation(flat):return (flat[3],flat[7],flat[11])
     pts=[translation(mat) for _,mat in front]
-    # The two sides of the street are far enough apart (lateral offset ~8.5 m) that
+    # The two parcel-center rows are far enough apart that
     # splitting on the sign of y separates them cleanly for this gentle test curve.
     frontage=get_control(gentle_mod,'Frontage')
     gaps=[]
@@ -145,8 +145,9 @@ def run():
     # expected vacancy, not a spacing error, so only check truly adjacent pairs.
     adjacent=[g for g in gaps if g<1.5*frontage]
     assert adjacent and all(abs(g-frontage)/frontage<.05 for g in adjacent),(frontage,gaps)
-    # Distance from a chosen site's pivot to the centerline should match
-    # Road Width/2 + Sidewalk Width (the building line's own lateral offset). The
+    # Distance from a chosen site's pivot to the centerline should match the curb
+    # offset plus half the parcel depth: buildings now originate at parcel-face
+    # centers rather than sitting directly on the frontage line. The
     # centerline itself is not flat (control points wiggle in y), so subtract the
     # centerline's own y at that x (linear interpolation; Smooth Streets is off,
     # so the evaluated curve really is this straight-segment polyline).
@@ -155,10 +156,10 @@ def run():
         for (x0,y0),(x1,y1) in zip(control,control[1:]):
             if x0<=x<=x1:return y0+(y1-y0)*(x-x0)/(x1-x0)
         return control[0][1] if x<control[0][0] else control[-1][1]
-    expected=get_control(gentle_mod,'Road Width')/2+get_control(gentle_mod,'Sidewalk Width')
+    expected=get_control(gentle_mod,'Road Width')/2+get_control(gentle_mod,'Sidewalk Width')+get_control(gentle_mod,'Depth')/2
     offsets=[abs(p[1]-centerline_y(p[0])) for p in pts]
     assert all(abs(o-expected)/expected<.05 for o in offsets),(expected,offsets)
-    record('Parcel spacing','Adjacent buildings on a gentle curve are within 5% of Frontage and Road Width/2+Sidewalk Width from the centerline')
+    record('Parcel spacing','Street-facing block boundaries drive explicit parcel-face centers at Frontage spacing behind the curb')
 
     # 3. No overlap between adjacent lots when bending is enabled (default).
     # A circular arc with a moderate radius (well under docs/PLAN.md §4.3's ~336 m
@@ -279,17 +280,25 @@ def run():
     names={node.name for node in plain_mod.node_group.nodes}
     assert 'Grid or curved streets' not in names
     assert 'Internal orthogonal road network' in names
+    assert 'Block boundaries to frontage curves' in names
     plain_mesh=mesh(plain);blocks=attr(plain_mesh,'tc_block_id')
     components=face_component_count(plain_mesh,4)
     assert blocks and max(blocks)>=3,(set(blocks),components)
     assert components>=4,components
+    set_control(plain_mod,'Density',1);set_control(plain_mod,'Parcel Guides',True)
+    guide_mesh=mesh(plain);layers=attr(guide_mesh,'tc_layer')
+    parcel_ids=attr(guide_mesh,'tc_parcel_id');parcel_blocks=attr(guide_mesh,'tc_block_id')
+    guide_indices=[index for index,layer in enumerate(layers) if layer==7]
+    assert guide_indices and len({parcel_ids[index] for index in guide_indices})>=8
+    assert len({parcel_blocks[index] for index in guide_indices})>=4
+    set_control(plain_mod,'Parcel Guides',False)
     set_control(plain_mod,'Density',0);set_control(plain_mod,'Parking Mix',1)
     layers=set(attr(mesh(plain),'tc_layer'));assert 5 in layers and 6 not in layers,layers
     set_control(plain_mod,'Parking Mix',0)
     layers=set(attr(mesh(plain),'tc_layer'));assert 6 in layers and 5 not in layers,layers
     set_control(plain_mod,'Open Spaces',False)
     layers=set(attr(mesh(plain),'tc_layer'));assert 5 not in layers and 6 not in layers,layers
-    record('Unified grid fallback','Internal centerlines split attributed block islands; vacant lots switch deterministically between parking and pocket green')
+    record('Unified grid fallback','Internal roads split blocks; street-facing block boundaries drive parcel guides with parcel/block IDs and vacant-lot uses')
 
     # 9. Error inputs.
     bad_mesh=bpy.data.meshes.new('Touching2')

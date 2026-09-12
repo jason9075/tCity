@@ -415,7 +415,7 @@ def build_surface(g,p,centerline,junction_points,has_junctions,road_material_fn)
     ground=_store(g,ground,'tc_block_id',island.outputs['Island Index'],'INT',label='Store residual block ID')
     ground=_mat(g,_tag(g,ground,4),material('v05 Bare ground',(.30,.27,.20),roughness=.92))
     results=[_gate(g,road,road_on),_gate(g,paving,sidewalk_on),_gate(g,ground,p['Ground'])]
-    return results,half,outer
+    return results,half,outer,ground
 
 
 # ------------------------------------------------------------- 4.4 road paint
@@ -495,21 +495,27 @@ def _open_space_assets(g,p):
     return parking,green
 
 
-def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_points,side,bend_buildings):
-    """One row of parcels on one side of the streets, resampled along the offset
-    building line (docs/PLAN.md §4.3); optionally bent to follow the curve."""
+def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_points,block_ground,side,bend_buildings,
+                block_frontage=False,normal_sites=True,corner_sites=True):
+    """Place parcels on either a legacy centerline side or block frontage curves."""
     outer=g.math('ADD',g.math('MULTIPLY',p['Road Width'],.5),p['Sidewalk Width'])
-    normal_attr=_named(g,'tc_normal','FLOAT_VECTOR')
-    lateral=_scale(g,normal_attr,g.math('MULTIPLY',outer,float(side)))
-    offset_curve=g.node('GeometryNodeSetPosition',f'Offset building line {side:+d}')
-    g.put(dense,offset_curve.inputs['Geometry']);g.put(lateral,offset_curve.inputs['Offset'])
-    dense_side=offset_curve.outputs[0]
-    frontage=g.node('GeometryNodeResampleCurve',f'One point per lot {side:+d}')
+    if block_frontage:
+        dense_side=dense
+    else:
+        normal_attr=_named(g,'tc_normal','FLOAT_VECTOR')
+        lateral=_scale(g,normal_attr,g.math('MULTIPLY',outer,float(side)))
+        offset_curve=g.node('GeometryNodeSetPosition',f'Offset building line {side:+d}')
+        g.put(dense,offset_curve.inputs['Geometry']);g.put(lateral,offset_curve.inputs['Offset'])
+        dense_side=offset_curve.outputs[0]
+    spline_index=g.node('GeometryNodeInputIndex').outputs[0]
+    dense_side=_store(g,dense_side,'tc_site_spline_id',spline_index,'INT',domain='CURVE')
+    label='block frontage' if block_frontage else f'side {side:+d}'
+    frontage=g.node('GeometryNodeResampleCurve',f'One point per lot on {label}')
     g.put(dense_side,frontage.inputs['Curve']);frontage.inputs['Mode'].default_value='Length'
     g.put(p['Frontage'],frontage.inputs['Length'])
     site_tangent=g.node('GeometryNodeInputTangent').outputs[0]
     stsep=g.node('ShaderNodeSeparateXYZ');g.put(site_tangent,stsep.inputs[0])
-    site_normal=g.vector(g.math('MULTIPLY',stsep.outputs['Y'],-1),stsep.outputs['X'],0)
+    site_normal=_named(g,'tc_normal','FLOAT_VECTOR') if block_frontage else g.vector(g.math('MULTIPLY',stsep.outputs['Y'],-1),stsep.outputs['X'],0)
     param=g.node('GeometryNodeSplineParameter')
     tagged=_store(g,frontage.outputs[0],'tc_site_u',param.outputs['Length'],'FLOAT')
     site_pos=g.node('GeometryNodeInputPosition').outputs[0]
@@ -565,11 +571,11 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     # they need this fixed here rather than relying on it being masked.
     stored_normal=_named(g,'tc_site_normal','FLOAT_VECTOR')
     stored_tangent=_named(g,'tc_site_tangent','FLOAT_VECTOR')
-    facing=_scale(g,stored_normal,float(side))
+    facing=stored_normal if block_frontage else _scale(g,stored_normal,float(side))
     align=g.node('FunctionNodeAlignRotationToVector','Face nearest street',axis='Y')
     g.put(facing,align.inputs['Vector'])
     idx=g.node('GeometryNodeInputIndex').outputs[0]
-    site_offset=0 if side>0 else 500000
+    site_offset=1000000 if block_frontage else (0 if side>0 else 500000)
     site_id=g.math('ADD',idx,site_offset)
 
     pos=g.node('GeometryNodeInputPosition').outputs[0]
@@ -583,7 +589,7 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     prox_own=g.node('GeometryNodeProximity','Nearest point on own street',target_element='POINTS')
     g.put(centerline,prox_own.inputs['Geometry']);g.put(pos,prox_own.inputs['Sample Position'])
     g.put(centerline_id,prox_own.inputs['Group ID']);g.put(own_id,prox_own.inputs['Sample Group ID'])
-    own_is_nearest=g.math('LESS_THAN',prox_own.outputs['Distance'],g.math('ADD',prox_any.outputs['Distance'],.05))
+    own_is_nearest=True if block_frontage else g.math('LESS_THAN',prox_own.outputs['Distance'],g.math('ADD',prox_any.outputs['Distance'],.05))
     occupied=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,43),p['Density'])
 
     # 0.6.3 corner buildings (docs/roadmap.md "轉角雙立面模組"): a site excluded by
@@ -626,7 +632,7 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     near_right_angle=g.math('LESS_THAN',g.math('ABSOLUTE',_dot(g,stored_tangent,other_tangent)),.5)
     corner_candidate=g.boolean('AND',g.boolean('AND',g.boolean('NOT',own_is_nearest),near_junction),
                                 g.boolean('AND',near_right_angle,close_enough))
-    corner_ok=g.boolean('AND',g.boolean('AND',corner_candidate,inside),g.boolean('AND',occupied,p['Corner Buildings']))
+    corner_ok=g.boolean('AND',g.boolean('AND',corner_candidate,inside),g.boolean('AND',occupied,p['Corner Buildings'])) if corner_sites else False
     # Which of the two mirror-image corner assets to use. The asset's own local
     # +X axis, once rotated to align local Y with `facing`, always ends up
     # pointing at rotate(facing, -90 deg) = (facing.y, -facing.x) in the world
@@ -666,12 +672,12 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
 
     tight_curve=_named(g,'tc_site_tight_curve','BOOLEAN')
     curvature_skip=g.boolean('AND',g.boolean('AND',g.boolean('AND',tight_curve,inside),own_is_nearest),
-                             g.boolean('NOT',near_junction))
+                             g.boolean('NOT',near_junction)) if normal_sites is not False else False
     safe_curve=g.boolean('NOT',tight_curve)
-    choose_normal=g.boolean('AND',g.boolean('AND',g.boolean('AND',g.boolean('AND',inside,own_is_nearest),occupied),
-                                            g.boolean('NOT',near_junction)),safe_curve)
-    vacant=g.boolean('AND',g.boolean('AND',g.boolean('AND',g.boolean('AND',inside,own_is_nearest),g.boolean('NOT',occupied)),
-                                     g.boolean('NOT',near_junction)),safe_curve)
+    valid_normal=g.boolean('AND',g.boolean('AND',g.boolean('AND',inside,own_is_nearest),g.boolean('NOT',near_junction)),safe_curve) if normal_sites is not False else False
+    if normal_sites is not True and normal_sites is not False:
+        curvature_skip=g.boolean('AND',curvature_skip,normal_sites)
+        valid_normal=g.boolean('AND',valid_normal,normal_sites)
 
     floors=g.random('INT',g.math('MINIMUM',p['Min Floors'],p['Max Floors']),g.math('MAXIMUM',p['Min Floors'],p['Max Floors']),p['Seed'],site_id,101)
     typ=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,307),p['Townhouse Mix'])
@@ -695,17 +701,49 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     floors=storeys.outputs[0]
     geo=points
     for name,value,dtype in [('tc_parcel_id',site_id,'INT'),('tc_floors',floors,'INT'),('tc_asset',asset,'INT'),
-                              ('tc_is_shed',is_shed,'BOOLEAN')]:
+                              ('tc_is_shed',is_shed,'BOOLEAN'),('tc_occupied',occupied,'BOOLEAN')]:
         geo=_store(g,geo,name,value,dtype)
-    # geo is already a Points component (from CurveToPoints above); just filter it.
+    centered=g.node('GeometryNodeSetPosition',f'Parcel centers behind frontage {side:+d}')
+    g.put(geo,centered.inputs['Geometry']);g.put(_scale(g,facing,g.math('MULTIPLY',p['Depth'],.5)),centered.inputs['Offset'])
+    centered_geo=centered.outputs['Geometry']
+    if not block_frontage:
+        center_pos=g.node('GeometryNodeInputPosition').outputs[0]
+        nearest_block=g.node('GeometryNodeSampleNearest',f'Nearest residual block {side:+d}',domain='POINT')
+        g.put(block_ground,nearest_block.inputs['Geometry']);g.put(center_pos,nearest_block.inputs['Sample Position'])
+        sample_block=g.node('GeometryNodeSampleIndex',f'Sample parcel block ID {side:+d}',data_type='INT',domain='POINT')
+        g.put(block_ground,sample_block.inputs['Geometry']);g.put(_named(g,'tc_block_id','INT'),_enabled(sample_block,'Value'))
+        g.put(nearest_block.outputs['Index'],sample_block.inputs['Index'])
+        centered_geo=_store(g,centered_geo,'tc_block_id',sample_block.outputs['Value'],'INT')
+    centered_geo=_store(g,centered_geo,'tc_site_valid',valid_normal,'BOOLEAN')
+    centered_geo=_store(g,centered_geo,'tc_layer',0,'INT')
+
+    parcel=g.node('GeometryNodeMeshGrid','Parcel face template')
+    parcel.inputs['Vertices X'].default_value=2;parcel.inputs['Vertices Y'].default_value=2
+    g.put(p['Frontage'],parcel.inputs['Size X']);g.put(p['Depth'],parcel.inputs['Size Y'])
+    valid_sites=g.node('GeometryNodeSeparateGeometry',f'Valid parcel sites {side:+d}',domain='POINT')
+    g.put(centered_geo,valid_sites.inputs['Geometry']);g.put(_named(g,'tc_site_valid','BOOLEAN'),valid_sites.inputs['Selection'])
+    parcel_instances=g.node('GeometryNodeInstanceOnPoints',f'Parcel faces {side:+d}')
+    g.put(valid_sites.outputs['Selection'],parcel_instances.inputs['Points']);g.put(parcel.outputs['Mesh'],parcel_instances.inputs['Instance'])
+    g.put(align.outputs['Rotation'],parcel_instances.inputs['Rotation'])
+    parcels=g.node('GeometryNodeRealizeInstances',f'Realize parcel faces {side:+d}')
+    g.put(parcel_instances.outputs['Instances'],parcels.inputs['Geometry'])
+    parcel_points=g.node('GeometryNodeMeshToPoints',f'Parcel face centers {side:+d}',mode='FACES')
+    g.put(parcels.outputs['Geometry'],parcel_points.inputs['Mesh'])
+    occupied_points=g.node('GeometryNodeSeparateGeometry',f'Occupied parcel faces {side:+d}',domain='POINT')
+    g.put(parcel_points.outputs['Points'],occupied_points.inputs['Geometry'])
+    g.put(_named(g,'tc_occupied','BOOLEAN'),occupied_points.inputs['Selection'])
+    normal_pts=occupied_points.outputs['Selection']
+    vacant_pts=occupied_points.outputs['Inverted']
+
+    guide=g.node('GeometryNodeSetPosition',f'Raise parcel guides {side:+d}')
+    g.put(parcels.outputs['Geometry'],guide.inputs['Geometry']);guide.inputs['Offset'].default_value=(0,0,.025)
+    guide_geo=_mat(g,_tag(g,guide.outputs['Geometry'],7),material('v07 Parcel guides',(.08,.32,.48),roughness=.7))
+    guide_geo=_gate(g,guide_geo,p['Parcel Guides'])
+
+    # Corner sites keep their dedicated rigid path; ordinary buildings and open
+    # spaces now originate from explicit parcel face centers.
     # Corner sites get their own unbent selection — own_is_nearest is false for
     # every corner_ok point, so the two selections can never overlap.
-    meshpts_normal=g.node('GeometryNodeSeparateGeometry','Chosen lots',domain='POINT')
-    g.put(geo,meshpts_normal.inputs['Geometry']);g.put(choose_normal,meshpts_normal.inputs['Selection'])
-    normal_vertices=g.node('GeometryNodePointsToVertices','Normal sites to mergeable vertices')
-    g.put(meshpts_normal.outputs['Selection'],normal_vertices.inputs['Points'])
-    normal_pts=g.node('GeometryNodeMergeByDistance','Deduplicate coincident normal sites')
-    g.put(normal_vertices.outputs['Mesh'],normal_pts.inputs['Geometry']);normal_pts.inputs['Distance'].default_value=1.0
     meshpts_corner=g.node('GeometryNodeSeparateGeometry','Chosen corner lots',domain='POINT')
     g.put(geo,meshpts_corner.inputs['Geometry']);g.put(corner_ok,meshpts_corner.inputs['Selection'])
     # A junction vertex splits the road into separate splines, and Resample Curve
@@ -748,27 +786,27 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
             pieces.append(instance.outputs['Instances'])
         return pieces
 
-    normal_pieces=instance_kit(normal_pts.outputs[0],f' on curved lots {side:+d}')
+    normal_pieces=instance_kit(normal_pts,f' on parcel faces {side:+d}')
     # Corner buildings are a fixed L-shape baked around the junction's outer
     # corner; bending them along the row (which only makes sense for a single
     # frontage-wide instance) would tear the sideways wing away from its anchor,
     # so they stay rigid regardless of the Bend Buildings to Curve toggle.
     corner_pieces=instance_kit(corner_pts.outputs[0],f' corner {side:+d}')
     parking_asset,green_asset=_open_space_assets(g,p)
-    parking_pick=g.boolean('OR',g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,3201),p['Parking Mix']),
+    parking_pick=g.boolean('OR',g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],parcel_attr.outputs['Attribute'],3201),p['Parking Mix']),
                            g.math('GREATER_THAN',p['Parking Mix'],.999999))
     open_on=g.boolean('AND',p['Ground'],p['Open Spaces'])
-    parking_selection=g.boolean('AND',g.boolean('AND',vacant,parking_pick),open_on)
-    green_selection=g.boolean('AND',g.boolean('AND',vacant,g.boolean('NOT',parking_pick)),open_on)
-    open_spaces=[_instance(g,geo,parking_asset,parking_selection,align.outputs['Rotation'],label=f'Parking lots {side:+d}',realize=True),
-                 _instance(g,geo,green_asset,green_selection,align.outputs['Rotation'],label=f'Pocket greens {side:+d}',realize=True)]
+    parking_selection=g.boolean('AND',parking_pick,open_on)
+    green_selection=g.boolean('AND',g.boolean('NOT',parking_pick),open_on)
+    open_spaces=[_instance(g,vacant_pts,parking_asset,parking_selection,align.outputs['Rotation'],label=f'Parking lots {side:+d}',realize=True),
+                 _instance(g,vacant_pts,green_asset,green_selection,align.outputs['Rotation'],label=f'Pocket greens {side:+d}',realize=True)]
     skipped=g.node('GeometryNodeSeparateGeometry',f'Unsafe curvature sites {side:+d}',domain='POINT')
     g.put(geo,skipped.inputs['Geometry']);g.put(curvature_skip,skipped.inputs['Selection'])
     has_skipped=g.math('GREATER_THAN',_point_count(g,skipped.outputs['Selection']),0)
-    return _bend(g,dense_side,normal_pieces,side,bend_buildings)+corner_pieces+open_spaces,has_skipped
+    return _bend(g,dense_side,normal_pieces,side,bend_buildings,block_frontage)+corner_pieces+open_spaces+[guide_geo],has_skipped
 
 
-def _bend(g,frontage_curve,pieces,side,bend_buildings):
+def _bend(g,frontage_curve,pieces,side,bend_buildings,block_frontage=False):
     """Realize each rigid instance and resample its vertices along the offset
     building line, holding local footprint shape (docs/PLAN.md §4.3 last algorithm).
 
@@ -786,12 +824,20 @@ def _bend(g,frontage_curve,pieces,side,bend_buildings):
         site_tangent=_named(g,'tc_site_tangent','FLOAT_VECTOR')
         site_normal=_named(g,'tc_site_normal','FLOAT_VECTOR')
         site_u=_named(g,'tc_site_u')
+        site_spline_id=_named(g,'tc_site_spline_id','INT')
         offset=g.vmath('SUBTRACT',vertex_pos,site_pos)
-        local_x=g.math('MULTIPLY',_dot(g,offset,site_tangent),float(side))
-        local_y=_dot(g,offset,site_normal)
+        if block_frontage:
+            tangent_parts=g.node('ShaderNodeSeparateXYZ');g.put(site_tangent,tangent_parts.inputs[0])
+            curve_left=g.vector(g.math('MULTIPLY',tangent_parts.outputs['Y'],-1),tangent_parts.outputs['X'],0)
+            local_x=_dot(g,offset,site_tangent)
+            local_y=_dot(g,offset,curve_left)
+        else:
+            local_x=g.math('MULTIPLY',_dot(g,offset,site_tangent),float(side))
+            local_y=_dot(g,offset,site_normal)
         new_u=g.math('ADD',site_u,local_x)
         sample=g.node('GeometryNodeSampleCurve','Bend along building line',mode='LENGTH')
         g.put(frontage_curve,sample.inputs['Curves']);g.put(new_u,_enabled(sample,'Length'))
+        g.put(site_spline_id,sample.inputs['Curve Index'])
         tsep=g.node('ShaderNodeSeparateXYZ');g.put(sample.outputs['Tangent'],tsep.inputs[0])
         curve_normal=g.vector(g.math('MULTIPLY',tsep.outputs['Y'],-1),tsep.outputs['X'],0)
         new_pos=g.vmath('ADD',sample.outputs['Position'],_scale(g,curve_normal,local_y))
@@ -806,7 +852,43 @@ def _bend(g,frontage_curve,pieces,side,bend_buildings):
     return bent
 
 
-def build_sites(g,p,cols,region_geo,boundary_sel,centerline,junction_points,bend_buildings):
+def build_block_frontages(g,p,block_ground,centerline_points):
+    """Extract the street-facing top boundary of residual block meshes as curves."""
+    normal=g.node('GeometryNodeInputNormal','Residual block top face normal')
+    normal_z=g.node('ShaderNodeSeparateXYZ');g.put(normal.outputs[0],normal_z.inputs[0])
+    top_faces=g.node('GeometryNodeSeparateGeometry','Residual block top faces',domain='FACE')
+    g.put(block_ground,top_faces.inputs['Geometry']);g.put(g.math('GREATER_THAN',normal_z.outputs['Z'],.9),top_faces.inputs['Selection'])
+    edge_neighbors=g.node('GeometryNodeInputMeshEdgeNeighbors','Residual block boundary neighbors')
+    position=g.node('GeometryNodeInputPosition').outputs[0]
+    nearest_street=g.node('GeometryNodeProximity','Block edge distance to street',target_element='POINTS')
+    g.put(centerline_points,nearest_street.inputs['Geometry']);g.put(position,nearest_street.inputs['Sample Position'])
+    outer=g.math('ADD',g.math('MULTIPLY',p['Road Width'],.5),p['Sidewalk Width'])
+    is_boundary=g.equal(edge_neighbors.outputs['Face Count'],1)
+    beside_street=g.boolean(
+        'AND',g.math('GREATER_THAN',nearest_street.outputs['Distance'],g.math('SUBTRACT',outer,.5)),
+        g.math('LESS_THAN',nearest_street.outputs['Distance'],g.math('ADD',outer,.5)))
+    street_edge=g.boolean('AND',is_boundary,beside_street)
+    curves=g.node('GeometryNodeMeshToCurve','Block boundaries to frontage curves')
+    g.put(top_faces.outputs['Selection'],curves.inputs['Mesh']);g.put(street_edge,curves.inputs['Selection'])
+    dense=g.node('GeometryNodeResampleCurve','Dense block frontage curves')
+    g.put(curves.outputs['Curve'],dense.inputs['Curve']);dense.inputs['Mode'].default_value='Length';g.put(.25,dense.inputs['Length'])
+    curve_position=g.node('GeometryNodeInputPosition').outputs[0]
+    nearest=g.node('GeometryNodeProximity','Nearest street from block frontage',target_element='POINTS')
+    g.put(centerline_points,nearest.inputs['Geometry']);g.put(curve_position,nearest.inputs['Sample Position'])
+    tangent=g.node('GeometryNodeInputTangent').outputs[0]
+    tangent_parts=g.node('ShaderNodeSeparateXYZ');g.put(tangent,tangent_parts.inputs[0])
+    left=g.vector(g.math('MULTIPLY',tangent_parts.outputs['Y'],-1),tangent_parts.outputs['X'],0)
+    away=g.vmath('SUBTRACT',curve_position,nearest.outputs['Position'])
+    inward=g.node('GeometryNodeSwitch','Choose block-facing frontage normal',input_type='VECTOR')
+    g.put(g.math('GREATER_THAN',_dot(g,left,away),0),inward.inputs['Switch'])
+    g.put(_scale(g,left,-1),inward.inputs['False']);g.put(left,inward.inputs['True'])
+    frontage=_store(g,dense.outputs['Curve'],'tc_normal',inward.outputs[0],'FLOAT_VECTOR')
+    top_size=g.node('GeometryNodeAttributeDomainSize','Residual block top face count',component='MESH')
+    g.put(top_faces.outputs['Selection'],top_size.inputs['Geometry'])
+    return frontage,g.math('GREATER_THAN',top_size.outputs['Face Count'],0)
+
+
+def build_sites(g,p,cols,region_geo,boundary_sel,centerline,junction_points,block_ground,bend_buildings):
     dense=g.node('GeometryNodeResampleCurve','Dense centerline for offsets')
     g.put(centerline,dense.inputs['Curve']);dense.inputs['Mode'].default_value='Length';g.put(.25,dense.inputs['Length'])
     tangent=g.node('GeometryNodeInputTangent').outputs[0]
@@ -817,11 +899,18 @@ def build_sites(g,p,cols,region_geo,boundary_sel,centerline,junction_points,bend
     # Geometry Proximity's POINTS target only accepts mesh/point-cloud geometry, not
     # a raw curve, so realize the centerline's own points once for the group-id check.
     centerline_pts=g.node('GeometryNodeCurveToPoints','Centerline points for proximity',mode='EVALUATED')
-    g.put(centerline,centerline_pts.inputs['Curve'])
-    pieces=[];curvature_warning=False
+    g.put(dense_geo,centerline_pts.inputs['Curve'])
+    block_frontages,has_block_tops=build_block_frontages(g,p,block_ground,centerline_pts.outputs['Points'])
+    pieces,curvature_warning=_place_side(
+        g,p,cols,region_geo,boundary_sel,centerline_pts.outputs['Points'],block_frontages,junction_points,
+        block_ground,1,bend_buildings,block_frontage=True,normal_sites=has_block_tops,corner_sites=False)
+    use_legacy_rows=g.boolean('NOT',has_block_tops)
     for side in (1,-1):
-        side_pieces,side_warning=_place_side(g,p,cols,region_geo,boundary_sel,centerline_pts.outputs['Points'],dense_geo,junction_points,side,bend_buildings)
-        pieces+=side_pieces;curvature_warning=g.boolean('OR',curvature_warning,side_warning)
+        corner_pieces,side_warning=_place_side(
+            g,p,cols,region_geo,boundary_sel,centerline_pts.outputs['Points'],dense_geo,junction_points,
+            block_ground,side,bend_buildings,normal_sites=use_legacy_rows)
+        pieces+=corner_pieces
+        curvature_warning=g.boolean('OR',curvature_warning,side_warning)
     return pieces,curvature_warning
 
 
@@ -995,8 +1084,8 @@ def curve_district(g,p,cols,region_geo,road_mesh_geo,grid_road_mesh_geo,boundary
     g.put(has_user_roads,surface_junctions.inputs['Switch'])
     g.put(empty,surface_junctions.inputs['False']);g.put(junction_points,surface_junctions.inputs['True'])
     surface_has_junctions=g.boolean('AND',has_junctions,has_user_roads)
-    surface,half,outer=build_surface(g,p,centerline,surface_junctions.outputs[0],surface_has_junctions,curve_road_material)
-    sites,curvature_warning=build_sites(g,p,cols,region_geo,boundary_sel,centerline,junction_points,bend_buildings)
+    surface,half,outer,block_ground=build_surface(g,p,centerline,surface_junctions.outputs[0],surface_has_junctions,curve_road_material)
+    sites,curvature_warning=build_sites(g,p,cols,region_geo,boundary_sel,centerline,junction_points,block_ground,bend_buildings)
     furniture=build_furniture(g,p,region_geo,boundary_sel,centerline)
     wires=build_wires(g,p,region_geo,boundary_sel,centerline,junction_points)
     warned_surface=[_store(g,geometry,'tc_curvature_warning',curvature_warning,'BOOLEAN',label='Store curvature warning')
