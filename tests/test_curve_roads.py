@@ -71,6 +71,13 @@ def instances(obj,kind=None):
 def digest(obj,kind):return sorted((n,tuple(round(v,5) for row in m for v in row)) for n,m in instances(obj,kind))
 
 
+def face_attribute(obj,name,value):
+    attribute=obj.data.attributes.new(name,'FLOAT','FACE')
+    for item in attribute.data:item.value=value
+    obj.data.update()
+    return attribute
+
+
 # A gentle S-curve matching the plan's own validated spike (docs/PLAN.md §3 #6):
 # straight boundary edges plus a free polyline drawn through the interior.
 S_CURVE_VERTS=[(-40,-40,0),(120,-40,0),(120,40,0),(-40,40,0),
@@ -307,7 +314,30 @@ def run():
     layers=set(attr(mesh(plain),'tc_layer'));assert 5 not in layers and 6 not in layers,layers
     record('Unified grid fallback','Block frontages drive attributed parcel guides; narrow edge parcels are clipped below full area; vacant lots switch uses')
 
-    # 9. Error inputs.
+    # 9. Optional source-mesh attributes and vertex groups locally override the
+    # global occupancy, height and facade controls at each parcel center.
+    zoned=region('Zoned street',[(-60,-40,0),(60,-40,0),(60,40,0),(-60,40,0),
+                                  (-35,0,0),(35,0,0)],[(0,1,2,3)],[(4,5)])
+    zoned_mod=tcity.district_modifier(zoned)
+    set_control(zoned_mod,'Smooth Streets',False);set_control(zoned_mod,'Bend Buildings to Curve',False)
+    set_control(zoned_mod,'Corner Buildings',False);set_control(zoned_mod,'Open Spaces',False)
+    set_control(zoned_mod,'Density',1);set_control(zoned_mod,'Min Floors',2);set_control(zoned_mod,'Max Floors',2)
+    set_control(zoned_mod,'Townhouse Mix',0);set_control(zoned_mod,'Metal Shed Mix',0)
+    vacancy=zoned.vertex_groups.new(name='tc_zone_vacancy')
+    vacancy.add([0,1,2,3],1,'REPLACE')
+    assert not digest(zoned,'Buildings')
+    vacancy.add([0,1,2,3],0,'REPLACE')
+    face_attribute(zoned,'tc_zone_min_floors',7)
+    face_attribute(zoned,'tc_zone_max_floors',7)
+    face_attribute(zoned,'tc_zone_facade_mix',1)
+    zoned_buildings=digest(zoned,'Buildings')
+    assert zoned_buildings
+    zoned_names=[name for name,_ in zoned_buildings]
+    assert all('_Buildings_7F_' in name for name in zoned_names),set(zoned_names)
+    assert all(int(name.rsplit('_',1)[1])>=3 for name in zoned_names),set(zoned_names)
+    record('Regional zoning attributes','Vertex-group vacancy and face attributes override density, floors and facade mix at parcel centers')
+
+    # 10. Error inputs.
     bad_mesh=bpy.data.meshes.new('Touching2')
     bad_mesh.from_pydata([(0,0,0),(50,0,0),(50,50,0),(0,50,0),(25,25,0)],[(0,4)],[(0,1,2,3)])
     bad_mesh.update()
@@ -328,7 +358,7 @@ def run():
     assert validate_road_curve(obj,curve_obj) is None
     record('Error inputs','validate_region rejects boundary-touching road edges and overlong centerlines; validate_road_curve rejects self-reference and non-curve objects')
 
-    # 10. Boundary detection unaffected by the presence of road edges.
+    # 11. Boundary detection unaffected by the presence of road edges.
     l_no_road=region('L no road',[(0,0,0),(110,0,0),(110,42,0),(48,42,0),(48,105,0),(0,105,0)],[(0,1,2,3,4,5)])
     l_with_road=region('L with road',[(0,0,0),(110,0,0),(110,42,0),(48,42,0),(48,105,0),(0,105,0),
                                        (10,10,0),(40,90,0)],[(0,1,2,3,4,5)],[(6,7)])
@@ -338,7 +368,7 @@ def run():
             assert inside(vert.co.x,vert.co.y),(label,tuple(vert.co))
     record('Boundary detection','Face Count == 1 boundary selection is unaffected by drawn road edges on the same L-shaped region')
 
-    # 11. Mesh-drawn edges vs an external Curve object give equivalent output.
+    # 12. Mesh-drawn edges vs an external Curve object give equivalent output.
     # Reuse the gentle centerline (item 2): the tight S-curve above sits right at
     # the edge of geometric degeneracy for its own profile width (already visible
     # as non-manifold edges when checked directly), which makes the EXACT boolean

@@ -200,6 +200,7 @@ Road Curves (Object socket，選配) ──► Object Info (Relative) ───�
 - **已完成（0.7 開發版）— 曲率安全**：以前後相鄰基地的弦向量估算局部轉角。彎折模式要求曲率半徑約不小於一個 `Depth`；剛體模式依 `Depth × 單戶角度 ≤ 0.3 m` 的後緣誤差預算。超限基地不生成建築或空地資產，輸出 `tc_curvature_warning`，側欄讀取後顯示紅色警示。
 - **已完成（0.7 開發版）— 街廓 frontage 與顯式基地面**：先分離殘餘街廓頂面，再從各頂面開放邊篩出位於道路外緣距離帶的臨路邊界，轉為 frontage curves 後等距取樣；法向由 frontage 切線建立、以最近道路只決定朝向街廓的符號，避免離散中心線造成旋轉抖動。正常頂面輸出不再使用「中心線兩側各一排」來源；若 Blender EXACT 差集在複合路口只留下側壁而無頂面，會自動回退舊排，中心線路徑也保留給轉角雙立面判定。每個候選點退入半個 `Depth` 後實例化 `Frontage × Depth` 矩形面，直接繼承街廓的 `tc_block_id`，再由面中心生成建築或空地。`Parcel Guides` 可輸出 `tc_layer = 7` 供檢查與烘焙。
 - **已完成（0.7 開發版）— 邊界裁切檢查面**：每個 frontage 候選另生成 8 × 8 面的細分 guide，依到殘餘街廓表面的距離刪除街廓外 cell，再由最近 parcel center 決定每個 cell 的唯一 owner，避免多面臨路候選重複占用。因此窄街廓、斜邊與區域邊緣會輸出小於完整基地面積的不規則 `tc_layer = 7` 輪廓，且 `tc_parcel_id`／`tc_block_id` 不經批次 Boolean、可穩定保留。實際建築與停車／綠地仍只取完整容納檢查通過的矩形基地中心，避免資產超界。
+- **已完成（0.7 開發版第一階段）— 區域屬性控制**：基地中心從來源 Mesh 表面取樣 `tc_zone_vacancy`、`tc_zone_min_floors`、`tc_zone_max_floors`、`tc_zone_facade_mix`，face attribute 與 vertex group 都可作為輸入；缺少屬性時分別回退 0 或既有全域控制。空置率乘在全域 `Density` 之下，樓層限制並取整至現有資產支援的 2–7 層。商業與年代分區仍等候專用資產。
 - 將細分近似輪廓轉成精確梯形／任意多邊形地籍。
 
 ## 6. 測試計畫

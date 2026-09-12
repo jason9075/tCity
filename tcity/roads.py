@@ -53,6 +53,22 @@ def _named(g,name,dtype='FLOAT'):
     return n.outputs['Attribute']
 
 
+def _sample_region_float(g,region_geo,position,name,fallback,label=''):
+    """Sample an optional float attribute from the source region surface."""
+    attribute=g.node('GeometryNodeInputNamedAttribute',data_type='FLOAT')
+    attribute.inputs['Name'].default_value=name
+    sample=g.node('GeometryNodeSampleNearestSurface',label or f'Sample {name}',data_type='FLOAT')
+    g.put(region_geo,sample.inputs['Mesh']);g.put(attribute.outputs['Attribute'],_enabled(sample,'Value'))
+    g.put(position,sample.inputs['Sample Position'])
+    exists=g.node('GeometryNodeSampleNearestSurface',f'{name} exists on region',data_type='BOOLEAN')
+    g.put(region_geo,exists.inputs['Mesh']);g.put(attribute.outputs['Exists'],_enabled(exists,'Value'))
+    g.put(position,exists.inputs['Sample Position'])
+    chosen=g.node('GeometryNodeSwitch',f'{name} or global control',input_type='FLOAT')
+    g.put(exists.outputs['Value'],chosen.inputs['Switch']);g.put(fallback,chosen.inputs['False'])
+    g.put(sample.outputs['Value'],chosen.inputs['True'])
+    return chosen.outputs[0]
+
+
 def _enabled(node,name):
     return next(s for s in node.inputs if s.name==name and s.enabled)
 
@@ -590,7 +606,11 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     g.put(centerline,prox_own.inputs['Geometry']);g.put(pos,prox_own.inputs['Sample Position'])
     g.put(centerline_id,prox_own.inputs['Group ID']);g.put(own_id,prox_own.inputs['Sample Group ID'])
     own_is_nearest=True if block_frontage else g.math('LESS_THAN',prox_own.outputs['Distance'],g.math('ADD',prox_any.outputs['Distance'],.05))
-    occupied=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,43),p['Density'])
+    zone_position=g.vmath('ADD',pos,_scale(g,facing,g.math('MULTIPLY',p['Depth'],.5)))
+    vacancy=_sample_region_float(g,region_geo,zone_position,'tc_zone_vacancy',0,'Sample local vacancy')
+    vacancy=g.math('MINIMUM',g.math('MAXIMUM',vacancy,0),1)
+    local_density=g.math('MULTIPLY',p['Density'],g.math('SUBTRACT',1,vacancy))
+    occupied=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,43),local_density)
 
     # 0.6.3 corner buildings (docs/roadmap.md "轉角雙立面模組"): a site excluded by
     # own_is_nearest (i.e. genuinely closer to a *different* road than its own) is
@@ -682,8 +702,14 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
         valid_normal=g.boolean('AND',valid_normal,normal_sites)
     if not block_frontage:candidate_normal=valid_normal
 
-    floors=g.random('INT',g.math('MINIMUM',p['Min Floors'],p['Max Floors']),g.math('MAXIMUM',p['Min Floors'],p['Max Floors']),p['Seed'],site_id,101)
-    typ=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,307),p['Townhouse Mix'])
+    zone_min=_sample_region_float(g,region_geo,zone_position,'tc_zone_min_floors',p['Min Floors'],'Sample local minimum floors')
+    zone_max=_sample_region_float(g,region_geo,zone_position,'tc_zone_max_floors',p['Max Floors'],'Sample local maximum floors')
+    zone_min=g.math('ROUND',g.math('MINIMUM',g.math('MAXIMUM',zone_min,2),7))
+    zone_max=g.math('ROUND',g.math('MINIMUM',g.math('MAXIMUM',zone_max,2),7))
+    floors=g.random('INT',g.math('MINIMUM',zone_min,zone_max),g.math('MAXIMUM',zone_min,zone_max),p['Seed'],site_id,101)
+    facade_mix=_sample_region_float(g,region_geo,zone_position,'tc_zone_facade_mix',p['Townhouse Mix'],'Sample local facade mix')
+    facade_mix=g.math('MINIMUM',g.math('MAXIMUM',facade_mix,0),1)
+    typ=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,307),facade_mix)
     palette=g.random('INT',0,2,p['Seed'],site_id,701)
     asset=g.math('ADD',g.math('MULTIPLY',g.math('SUBTRACT',floors,2),6),g.math('ADD',g.math('MULTIPLY',typ,3),palette))
     is_shed=g.boolean('OR',g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,1103),p['Metal Shed Mix']),
@@ -704,7 +730,9 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     floors=storeys.outputs[0]
     geo=points
     for name,value,dtype in [('tc_parcel_id',site_id,'INT'),('tc_floors',floors,'INT'),('tc_asset',asset,'INT'),
-                              ('tc_is_shed',is_shed,'BOOLEAN'),('tc_occupied',occupied,'BOOLEAN')]:
+                              ('tc_is_shed',is_shed,'BOOLEAN'),('tc_occupied',occupied,'BOOLEAN'),
+                              ('tc_zone_vacancy',vacancy,'FLOAT'),('tc_zone_min_floors',zone_min,'FLOAT'),
+                              ('tc_zone_max_floors',zone_max,'FLOAT'),('tc_zone_facade_mix',facade_mix,'FLOAT')]:
         geo=_store(g,geo,name,value,dtype)
     centered=g.node('GeometryNodeSetPosition',f'Parcel centers behind frontage {side:+d}')
     g.put(geo,centered.inputs['Geometry']);g.put(_scale(g,facing,g.math('MULTIPLY',p['Depth'],.5)),centered.inputs['Offset'])
