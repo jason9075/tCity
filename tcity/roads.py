@@ -674,10 +674,13 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
     curvature_skip=g.boolean('AND',g.boolean('AND',g.boolean('AND',tight_curve,inside),own_is_nearest),
                              g.boolean('NOT',near_junction)) if normal_sites is not False else False
     safe_curve=g.boolean('NOT',tight_curve)
-    valid_normal=g.boolean('AND',g.boolean('AND',g.boolean('AND',inside,own_is_nearest),g.boolean('NOT',near_junction)),safe_curve) if normal_sites is not False else False
+    candidate_normal=g.boolean('AND',g.boolean('AND',own_is_nearest,g.boolean('NOT',near_junction)),safe_curve) if normal_sites is not False else False
+    valid_normal=g.boolean('AND',candidate_normal,inside) if normal_sites is not False else False
     if normal_sites is not True and normal_sites is not False:
         curvature_skip=g.boolean('AND',curvature_skip,normal_sites)
+        candidate_normal=g.boolean('AND',candidate_normal,normal_sites)
         valid_normal=g.boolean('AND',valid_normal,normal_sites)
+    if not block_frontage:candidate_normal=valid_normal
 
     floors=g.random('INT',g.math('MINIMUM',p['Min Floors'],p['Max Floors']),g.math('MAXIMUM',p['Min Floors'],p['Max Floors']),p['Seed'],site_id,101)
     typ=g.math('LESS_THAN',g.random('FLOAT',0,1,p['Seed'],site_id,307),p['Townhouse Mix'])
@@ -715,28 +718,57 @@ def _place_side(g,p,cols,region_geo,boundary_sel,centerline,dense,junction_point
         g.put(nearest_block.outputs['Index'],sample_block.inputs['Index'])
         centered_geo=_store(g,centered_geo,'tc_block_id',sample_block.outputs['Value'],'INT')
     centered_geo=_store(g,centered_geo,'tc_site_valid',valid_normal,'BOOLEAN')
+    centered_geo=_store(g,centered_geo,'tc_site_candidate',candidate_normal,'BOOLEAN')
     centered_geo=_store(g,centered_geo,'tc_layer',0,'INT')
 
     parcel=g.node('GeometryNodeMeshGrid','Parcel face template')
     parcel.inputs['Vertices X'].default_value=2;parcel.inputs['Vertices Y'].default_value=2
     g.put(p['Frontage'],parcel.inputs['Size X']);g.put(p['Depth'],parcel.inputs['Size Y'])
-    valid_sites=g.node('GeometryNodeSeparateGeometry',f'Valid parcel sites {side:+d}',domain='POINT')
-    g.put(centered_geo,valid_sites.inputs['Geometry']);g.put(_named(g,'tc_site_valid','BOOLEAN'),valid_sites.inputs['Selection'])
+    candidate_sites=g.node('GeometryNodeSeparateGeometry',f'Candidate parcel sites {side:+d}',domain='POINT')
+    g.put(centered_geo,candidate_sites.inputs['Geometry']);g.put(_named(g,'tc_site_candidate','BOOLEAN'),candidate_sites.inputs['Selection'])
     parcel_instances=g.node('GeometryNodeInstanceOnPoints',f'Parcel faces {side:+d}')
-    g.put(valid_sites.outputs['Selection'],parcel_instances.inputs['Points']);g.put(parcel.outputs['Mesh'],parcel_instances.inputs['Instance'])
+    g.put(candidate_sites.outputs['Selection'],parcel_instances.inputs['Points']);g.put(parcel.outputs['Mesh'],parcel_instances.inputs['Instance'])
     g.put(align.outputs['Rotation'],parcel_instances.inputs['Rotation'])
     parcels=g.node('GeometryNodeRealizeInstances',f'Realize parcel faces {side:+d}')
     g.put(parcel_instances.outputs['Instances'],parcels.inputs['Geometry'])
     parcel_points=g.node('GeometryNodeMeshToPoints',f'Parcel face centers {side:+d}',mode='FACES')
     g.put(parcels.outputs['Geometry'],parcel_points.inputs['Mesh'])
+    g.put(_named(g,'tc_site_valid','BOOLEAN'),parcel_points.inputs['Selection'])
     occupied_points=g.node('GeometryNodeSeparateGeometry',f'Occupied parcel faces {side:+d}',domain='POINT')
     g.put(parcel_points.outputs['Points'],occupied_points.inputs['Geometry'])
     g.put(_named(g,'tc_occupied','BOOLEAN'),occupied_points.inputs['Selection'])
     normal_pts=occupied_points.outputs['Selection']
     vacant_pts=occupied_points.outputs['Inverted']
 
+    guide_faces=parcels.outputs['Geometry']
+    if block_frontage:
+        guide_template=g.node('GeometryNodeMeshGrid','Subdivided parcel guide template')
+        guide_template.inputs['Vertices X'].default_value=9;guide_template.inputs['Vertices Y'].default_value=9
+        g.put(p['Frontage'],guide_template.inputs['Size X']);g.put(p['Depth'],guide_template.inputs['Size Y'])
+        guide_instances=g.node('GeometryNodeInstanceOnPoints','Parcel guide grids on block frontages')
+        g.put(candidate_sites.outputs['Selection'],guide_instances.inputs['Points'])
+        g.put(guide_template.outputs['Mesh'],guide_instances.inputs['Instance']);g.put(align.outputs['Rotation'],guide_instances.inputs['Rotation'])
+        guide_realized=g.node('GeometryNodeRealizeInstances','Realize subdivided parcel guides')
+        g.put(guide_instances.outputs['Instances'],guide_realized.inputs['Geometry'])
+        guide_position=g.node('GeometryNodeInputPosition').outputs[0]
+        block_distance=g.node('GeometryNodeProximity','Clip parcel guide cells to block surface',target_element='FACES')
+        g.put(block_ground,block_distance.inputs['Geometry']);g.put(guide_position,block_distance.inputs['Sample Position'])
+        nearest_parcel=g.node('GeometryNodeSampleNearest','Nearest parcel owner for guide cells',domain='POINT')
+        g.put(candidate_sites.outputs['Selection'],nearest_parcel.inputs['Geometry'])
+        g.put(guide_position,nearest_parcel.inputs['Sample Position'])
+        parcel_owner=g.node('GeometryNodeSampleIndex','Assign guide cells to nearest parcel',data_type='INT',domain='POINT')
+        g.put(candidate_sites.outputs['Selection'],parcel_owner.inputs['Geometry'])
+        g.put(_named(g,'tc_parcel_id','INT'),_enabled(parcel_owner,'Value'))
+        g.put(nearest_parcel.outputs['Index'],parcel_owner.inputs['Index'])
+        wrong_owner=g.boolean('NOT',g.equal(_named(g,'tc_parcel_id','INT'),parcel_owner.outputs['Value'],.01))
+        clipped_cells=g.node('GeometryNodeDeleteGeometry','Remove parcel guide cells outside block',domain='FACE',mode='ALL')
+        g.put(guide_realized.outputs['Geometry'],clipped_cells.inputs['Geometry'])
+        outside_block=g.math('GREATER_THAN',block_distance.outputs['Distance'],.02)
+        g.put(g.boolean('OR',outside_block,wrong_owner),clipped_cells.inputs['Selection'])
+        guide_faces=clipped_cells.outputs['Geometry']
     guide=g.node('GeometryNodeSetPosition',f'Raise parcel guides {side:+d}')
-    g.put(parcels.outputs['Geometry'],guide.inputs['Geometry']);guide.inputs['Offset'].default_value=(0,0,.025)
+    g.put(guide_faces,guide.inputs['Geometry'])
+    guide.inputs['Offset'].default_value=(0,0,.025)
     guide_geo=_mat(g,_tag(g,guide.outputs['Geometry'],7),material('v07 Parcel guides',(.08,.32,.48),roughness=.7))
     guide_geo=_gate(g,guide_geo,p['Parcel Guides'])
 

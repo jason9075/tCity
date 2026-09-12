@@ -291,6 +291,13 @@ def run():
     guide_indices=[index for index,layer in enumerate(layers) if layer==7]
     assert guide_indices and len({parcel_ids[index] for index in guide_indices})>=8
     assert len({parcel_blocks[index] for index in guide_indices})>=4
+    guide_areas=collections.defaultdict(float)
+    for face in guide_mesh.polygons:
+        if all(layers[index]==7 for index in face.vertices):
+            guide_areas[parcel_ids[face.vertices[0]]]+=face.area
+    full_area=get_control(plain_mod,'Frontage')*get_control(plain_mod,'Depth')
+    assert guide_areas and max(guide_areas.values())<=full_area*1.001,(full_area,max(guide_areas.values()))
+    assert any(0<area<full_area*.75 for area in guide_areas.values()),sorted(guide_areas.values())
     set_control(plain_mod,'Parcel Guides',False)
     set_control(plain_mod,'Density',0);set_control(plain_mod,'Parking Mix',1)
     layers=set(attr(mesh(plain),'tc_layer'));assert 5 in layers and 6 not in layers,layers
@@ -298,7 +305,7 @@ def run():
     layers=set(attr(mesh(plain),'tc_layer'));assert 6 in layers and 5 not in layers,layers
     set_control(plain_mod,'Open Spaces',False)
     layers=set(attr(mesh(plain),'tc_layer'));assert 5 not in layers and 6 not in layers,layers
-    record('Unified grid fallback','Internal roads split blocks; street-facing block boundaries drive parcel guides with parcel/block IDs and vacant-lot uses')
+    record('Unified grid fallback','Block frontages drive attributed parcel guides; narrow edge parcels are clipped below full area; vacant lots switch uses')
 
     # 9. Error inputs.
     bad_mesh=bpy.data.meshes.new('Touching2')
