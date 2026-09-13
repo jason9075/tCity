@@ -6,7 +6,7 @@ ROOT=Path(__file__).resolve().parents[1]
 bpy.ops.wm.open_mainfile(filepath=str(ROOT/'dist/TCity_Taiwan_Farmland.blend'))
 obj=next(o for o in bpy.context.scene.objects if o.get('tc_farmland'))
 mod=next(m for m in obj.modifiers if m.type=='NODES')
-assert mod.node_group.name=='TCity • Taiwan Farmland v0.2'
+assert mod.node_group.name=='TCity • Taiwan Farmland v0.3'
 assert sum(o.type=='CAMERA' for o in bpy.context.scene.objects)==4
 assert any(i.packed_file for i in bpy.data.images if i.source=='FILE')
 assert not hasattr(bpy.types,'TCITY_PT_farmland')

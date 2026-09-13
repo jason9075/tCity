@@ -43,7 +43,7 @@ class TCITY_OT_farm_seed(bpy.types.Operator):
 
 class TCITY_OT_farm_preset(bpy.types.Operator):
     bl_idname='tcity.farmland_preset';bl_label='Farmland Preset';bl_options={'REGISTER','UNDO'}
-    preset:bpy.props.EnumProperty(items=[('PADDY','水稻田',''),('MIXED','混合耕作',''),('FRINGE','農工交錯','')])
+    preset:bpy.props.EnumProperty(items=[('PADDY','水稻田',''),('MIXED','混合耕作',''),('FRINGE','農工交錯',''),('VILLAGE','農村聚落','紅瓦平房、水泥農舍與前院沿農路成群配置')])
     def execute(self,context):
         mod=farmland_modifier(context.active_object)
         if not mod:return {'CANCELLED'}
@@ -55,7 +55,7 @@ LABELS={'Woodland Mix':'自然樹林用地機率','Trees':'雜木與竹叢','Uti
         'Field Angle':'田區方向 (°)','Bund Width':'田埂寬 (m)','Rice Mix':'水稻／蔬菜比','Ripening':'稻田成熟比例',
         'Orchard Mix':'果園機率','Fallow Mix':'休耕機率','Flooded Mix':'蓄水田機率','Structure Mix':'農業設施用地機率',
         'Farm Roads':'農路','Road Width':'農路寬 (m)','Irrigation':'灌溉明渠','Crops':'作物與果樹',
-        'Plant Spacing':'稻菜間距 (m)','Structures':'農舍與農用棚'}
+        'Plant Spacing':'稻菜間距 (m)','Structures':'農舍與農用棚','Village Mix':'沿路聚落密度'}
 
 
 class TCITY_OT_farm_upgrade(bpy.types.Operator):
@@ -80,10 +80,11 @@ class TCITY_PT_farmland(bpy.types.Panel):
         mod=farmland_modifier(context.active_object)
         if not mod:return
         if mod.node_group.name!=GROUP_NAME:
-            layout.operator('tcity.upgrade_farmland',text='升級農地 · 農舍、樹林與電桿')
+            layout.operator('tcity.upgrade_farmland',text='升級農地 · 沿路農村聚落')
             return
         row=layout.row(align=True)
         for key,label in [('PADDY','水稻田'),('MIXED','混合耕作'),('FRINGE','農工交錯')]:row.operator('tcity.farmland_preset',text=label).preset=key
+        layout.operator('tcity.farmland_preset',text='農村聚落 · 紅瓦平房與農舍').preset='VILLAGE'
         layout.operator('tcity.farmland_seed',text='換一組農地',icon='FILE_REFRESH')
         headers={'Seed':'分割與田形','Rice Mix':'土地用途與生長階段','Woodland Mix':'鄉間環境','Farm Roads':'農路與灌溉','Crops':'模型與效能'};box=layout
         for name,*_ in SOCKETS:

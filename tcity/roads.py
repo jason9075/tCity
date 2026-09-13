@@ -143,7 +143,9 @@ def _self_union(g,geo,label=''):
 
 def _boolean_op(g,a,b,op,label=''):
     n=g.node('GeometryNodeMeshBoolean',label or ('Curved street '+op.lower()),operation=op,solver='EXACT')
-    g.put(a,_mesh1(n));g.put(b,_mesh2(n))
+    # UNION / INTERSECT evaluate only the multi-input Mesh socket in Blender 5.2.
+    # Mesh 1 is disabled there; linking it silently drops the first operand.
+    g.put(a,_mesh1(n) if op=='DIFFERENCE' else _mesh2(n));g.put(b,_mesh2(n))
     return n.outputs['Mesh']
 
 

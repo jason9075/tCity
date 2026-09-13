@@ -3,8 +3,8 @@ See docs/research/rural-landscape.md for observations and source attribution.
 """
 import math
 import random
-from mathutils import Vector
-from .assets import material
+from mathutils import Vector, Matrix
+from .assets import material, MeshBuilder
 from .surfaces import surface, palette
 from .sheds import sheet, sloped_roof, metal_palette
 from .lived_in import rod, cable, water_tank, aircon, plant
@@ -107,6 +107,73 @@ def farmhouse(b,variant):
     for j in range(5):plant(b,(-1.6+j*.53,-5.8,.15),.6,rp,510+j)
     b.box((1.4,-3.9,.25),(1.1,.75,.35),metals[3])
     for k in range(5):b.box((1.4,-3.9,.45+k*.055),(1.1,.08,.04),rp['wood'] if 'wood' in rp else p['concrete'])
+
+
+def village_home(b,variant):
+    """Low tiled-roof homes sharing a forecourt; front is local -Y.
+
+    The three compounds mix an older brick house with a modest RC neighbour,
+    or two single-storey houses. All vertices fit a 16 m horizontal radius.
+    """
+    rp=palette();metals=metal_palette()
+    p={'steel':surface('Village zinc frames',(.42,.44,.40),metallic=.5),
+       'dark':material('Village interior',(.025,.033,.031)),
+       'concrete':surface('Village courtyard concrete',(.43,.42,.37)),
+       'pipe':material('Village PVC',(.48,.49,.44))}
+    brick=surface('Village old brick',(.38,.16,.10),tile='brick')
+    tile=surface('Village terracotta roof',(.46,.16,.095))
+    tile_dark=surface('Village weathered roof tile',(.31,.095,.055))
+    wall=surface('Village limewash',(.64,.61,.50))
+    b.box((0,-1,.055),(24,19,.11),p['concrete'])
+
+    def bungalow(builder,width,depth,finish,roof_material):
+        x0,x1=-width/2,width/2;y0,y1=-depth/2,depth/2;h=3.15
+        for x in (x0,x1):builder.box((x,0,h/2),(.18,depth,h),finish)
+        builder.box((0,y1,h/2),(width,.18,h),finish)
+        builder.box((0,0,.13),(width,depth,.18),p['concrete'])
+        openings=[(-width*.31,1.15,1.65,1.05),(0,1.2,1.15,2.2),(width*.31,1.15,1.65,1.05)]
+        front_wall(builder,x0,x1,y0,0,h,openings,finish,p)
+        for x in (-width*.31,width*.31):window(builder,x,y0-.05,1.65,1.15,1.05,p)
+        builder.box((0,y0+.06,1.12),(1.18,.08,2.18),p['dark'])
+        builder.box((-.31,y0-.025,1.12),(.54,.06,2.15),metals[3])
+        # Ridge runs parallel to the broad street facade, as in the reference.
+        eave,ridge=3.28,4.35
+        for x in (x0,x1):builder.add([(x,y0,h),(x,y1,h),(x,0,ridge)],[(0,1,2)],finish)
+        for y in (y0-.32,y1+.32):
+            builder.add([(x0-.3,y,eave),(x1+.3,y,eave),(x1+.3,0,ridge),(x0-.3,0,ridge)],[(0,1,2,3)],roof_material)
+            rows=9;columns=math.ceil((width+.6)/.25)
+            for i in range(columns+1):
+                x=x0-.3+i*(width+.6)/columns
+                for j in range(rows):
+                    a=j/rows;c=(j+1)/rows
+                    rod(builder,(x,y*(1-a),eave+(ridge-eave)*a+.035),
+                        (x,y*(1-c),eave+(ridge-eave)*c+.035),.045,
+                        tile_dark if (i+j)%7==0 else roof_material,6)
+        rod(builder,(x0-.4,0,ridge+.06),(x1+.4,0,ridge+.06),.11,roof_material)
+        sloped_roof(builder,x0-.15,x1+.15,y0-1.8,y0-.12,2.48,2.82,metals[(variant+1)%5],p['steel'])
+        for x in (x0+.15,x1-.15):rod(builder,(x,y0-1.7,.1),(x,y0-1.7,2.5),.035,p['steel'])
+
+    left=MeshBuilder();bungalow(left,10.,7.,brick if variant!=1 else wall,tile)
+    left.transform(Matrix.Translation((-6.1,2.8,0)));b.extend(left)
+    right=MeshBuilder()
+    if variant==0:
+        farmhouse(right,0)
+    else:
+        bungalow(right,8.,6.3,wall if variant==1 else brick,tile_dark if variant==2 else tile)
+    right.transform(Matrix.Translation((5.6,1.8 if variant==0 else 2.4,0)));b.extend(right)
+    # Open-sided work shed and low boundary walls leave the street entrance open.
+    sloped_roof(b,2.,10.6,-8.2,-4.4,2.55,2.9,metals[4 if variant==1 else 2],p['steel'])
+    for x in (2.1,10.5):
+        for y in (-8.1,-4.5):rod(b,(x,y,.12),(x,y,2.6),.04,p['steel'])
+    for x in (-11.85,11.85):b.box((x,-1,.48),(.18,18.8,.85),brick)
+    for x,w in [(-8.,7.7),(8.,7.7)]:b.box((x,-10.4,.45),(w,.18,.8),brick)
+    for j in range(4):plant(b,(-10.6+j*.6,-8.8,.12),.8,rp,1700+j+variant*10)
+    for j in range(3):b.box((3.2+j*.8,-6.3,.35),(.62,.85,.55),metals[3])
+    tree=MeshBuilder()
+    from .farm_assets import palette as farm_palette
+    woodland(tree,farm_palette(),0)
+    tree.verts=[(x*.7+.2,y*.7+6.5,z*.8) for x,y,z in tree.verts]
+    b.extend(tree)
 
 
 def woodland(b,p,variant):

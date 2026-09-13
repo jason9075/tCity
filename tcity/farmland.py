@@ -9,7 +9,7 @@ from .nodes import Graph, set_control
 from .farm_assets import palette, ensure_farm_assets
 from .roads import _join, _transform, _mat, _gate, _store, _named, _index_switch, _boolean_op, _self_union
 
-GROUP_NAME='TCity • Taiwan Farmland v0.2'
+GROUP_NAME='TCity • Taiwan Farmland v0.3'
 SOCKETS=[
     ('Seed','NodeSocketInt',31,0,100000,'農地分割與作物變化 / Deterministic layout and crops'),
     ('Plot Width','NodeSocketFloat',22.,8.,80.,'田塊平均短邊，公尺 / Average parcel width'),
@@ -23,6 +23,7 @@ SOCKETS=[
     ('Fallow Mix','NodeSocketFloat',.12,0,.8,'休耕裸土機率 / Conditional fallow probability'),
     ('Flooded Mix','NodeSocketFloat',.06,0,.8,'整地蓄水田機率 / Conditional flooded-paddy probability'),
     ('Structure Mix','NodeSocketFloat',.07,0,.6,'農舍、鐵皮農用棚與栽培隧道用地機率 / Facility parcel probability'),
+    ('Village Mix','NodeSocketFloat',0.,0,1,'沿路聚落院落機率；田寬建議至少 34 m / Roadside residential compounds'),
     ('Woodland Mix','NodeSocketFloat',.10,0,.7,'自然樹林用地機率，與整齊果園分開 / Conditional woodland probability'),
     ('Trees','NodeSocketBool',True,None,None,'自然雜木與竹叢 / Woodland trees and bamboo'),
     ('Utility Poles','NodeSocketBool',True,None,None,'沿農路的混凝土電桿 / Rural roadside poles'),
@@ -40,7 +41,9 @@ PRESETS={
     'PADDY':{'Rice Mix':1.,'Ripening':.48,'Orchard Mix':0.,'Fallow Mix':.08,'Flooded Mix':.08,'Structure Mix':.025,'Plot Width':19.,'Plot Length':46.,'Irregularity':.7},
     'MIXED':{'Rice Mix':.48,'Ripening':.26,'Orchard Mix':.25,'Fallow Mix':.14,'Flooded Mix':.035,'Structure Mix':.07,'Plot Width':23.,'Plot Length':38.,'Irregularity':.7},
     'FRINGE':{'Rice Mix':.60,'Ripening':.32,'Orchard Mix':.07,'Fallow Mix':.22,'Flooded Mix':.025,'Structure Mix':.30,'Plot Width':25.,'Plot Length':40.,'Irregularity':.42},
+    'VILLAGE':{'Rice Mix':.55,'Ripening':.35,'Orchard Mix':.04,'Fallow Mix':.18,'Flooded Mix':.02,'Structure Mix':.09,'Village Mix':.95,'Woodland Mix':.035,'Plot Width':36.,'Plot Length':58.,'Irregularity':.45,'Road Width':4.,'Farm Roads':True,'Structures':True},
 }
+for _preset in ('PADDY','MIXED','FRINGE'):PRESETS[_preset]['Village Mix']=0.
 
 
 class FarmGraph(Graph):
@@ -175,6 +178,19 @@ def ensure_group():
     def canal_clip(geo):return _gate(g,_boolean_op(g,_boolean_op(g,geo,road_void,'DIFFERENCE'),clip,'INTERSECT'),p['Irrigation'])
     canal=canal_clip(canal);water=canal_clip(water)
     g.section('03 / LAND · solid clipped parcels, bunds and persistent crop IDs',(3600,0))
+    # Allocate whole roadside parcels within an off-centre village envelope.
+    # Crops and buildings sample the same land-use surface after clipping.
+    access=g.node('GeometryNodeProximity',target_element='FACES')
+    g.put(road_mesh,access.inputs['Geometry']);g.put(pos,access.inputs['Sample Position'])
+    village_center=g.vector(g.add(low.outputs['X'],g.mul(span.outputs['X'],.43)),
+                            g.add(low.outputs['Y'],g.mul(span.outputs['Y'],.52)),0)
+    relative=g.vmath('DIVIDE',g.vmath('SUBTRACT',pos,village_center),
+                     g.vector(g.mul(span.outputs['X'],.40),g.mul(span.outputs['Y'],.43),1))
+    length=g.node('ShaderNodeVectorMath',operation='LENGTH');g.put(relative,length.inputs[0])
+    village=g.boolean('AND',g.math('LESS_THAN',length.outputs['Value'],1),
+                      g.math('LESS_THAN',access.outputs['Distance'],g.mul(W,.8)))
+    village=g.boolean('AND',village,g.boolean('AND',p['Farm Roads'],chance('Village Mix',263)))
+    field_plan=_store(g,field_plan,'farm_kind',g.switch(village,_named(g,'farm_kind','INT'),8),'INT','FACE')
     field_void=g.prism(field_plan,-.4,.3)
     bund=g.prism(region,-.25,.13)
     for cut in (field_void,road_void,canal_void):bund=_boolean_op(g,bund,cut,'DIFFERENCE')
@@ -232,17 +248,33 @@ def ensure_group():
     pieces.append(g.instances(forest.outputs['Points'],col,wood_index,safe,g.vector(wood_scale,wood_scale,wood_scale),rot))
     g.section('05 / FACILITIES · grounded farm buildings on allocated yards',(7400,0))
     ray=g.ray(tops,pos,field_kind)
-    valid=g.boolean('AND',ray.outputs['Is Hit'],g.equal(ray.outputs['Attribute'],6))
+    is_village=g.equal(ray.outputs['Attribute'],8)
+    valid=g.boolean('AND',ray.outputs['Is Hit'],g.boolean('OR',g.equal(ray.outputs['Attribute'],6),is_village))
     choice=g.random('INT',0,4,seed,idx,271)
     asset=_index_switch(g,choice,'INT',[4,5,6,8,9])
     radius=_index_switch(g,choice,'FLOAT',[8.3,8.8,7.8,9.8,9.8])
+    asset=g.switch(is_village,asset,g.random('INT',12,14,seed,idx,277))
+    radius=g.switch(is_village,radius,12.48,'FLOAT')
     valid=g.boolean('AND',valid,g.math('GREATER_THAN',g.distance(edges,pos),radius))
     valid=g.boolean('AND',valid,p['Structures'])
-    yard_points=_transform(g,centers.outputs[0],(0,0,.02))
+    yards=g.node('GeometryNodeSeparateGeometry',domain='POINT')
+    g.put(centers.outputs[0],yards.inputs['Geometry']);g.put(is_village,yards.inputs['Selection'])
+    offsets=[g.vector(0,g.mul(L,side*.23),0) for side in (-1,1)]
+    can_pair=g.math('GREATER_THAN',L,55.)
+    for offset in offsets:
+        candidate=g.vmath('ADD',pos,offset)
+        can_pair=g.boolean('AND',can_pair,g.math('GREATER_THAN',g.distance(edges,candidate),12.6))
+        hit=g.ray(tops,candidate,field_kind)
+        can_pair=g.boolean('AND',can_pair,g.boolean('AND',hit.outputs['Is Hit'],g.equal(hit.outputs['Attribute'],8)))
+    split_yards=g.node('GeometryNodeSeparateGeometry',domain='POINT')
+    g.put(yards.outputs['Selection'],split_yards.inputs['Geometry']);g.put(can_pair,split_yards.inputs['Selection'])
+    layout=_join(g,[split_yards.outputs['Inverted']]+[_transform(g,split_yards.outputs['Selection'],offset) for offset in offsets])
+    yard_points=_transform(g,_join(g,[yards.outputs['Inverted'],layout]),(0,0,.02))
     nearest=g.node('GeometryNodeProximity',target_element='FACES');g.put(road_mesh,nearest.inputs['Geometry']);g.put(pos,nearest.inputs['Sample Position'])
     toward=g.node('ShaderNodeSeparateXYZ');g.put(g.vmath('SUBTRACT',nearest.outputs['Position'],pos),toward.inputs[0])
     bearing=g.add(g.math('ARCTAN2',toward.outputs['Y'],toward.outputs['X']),math.pi/2)
-    pieces.append(g.instances(yard_points,col,asset,valid,rotation=g.vector(0,0,g.mul(bearing,p['Farm Roads']))))
+    home_scale=g.switch(is_village,1.,.78,'FLOAT')
+    pieces.append(g.instances(yard_points,col,asset,valid,scale=g.vector(home_scale,home_scale,home_scale),rotation=g.vector(0,0,g.mul(bearing,p['Farm Roads']))))
     from .rural_utilities import rural_utilities
     pieces.extend(rural_utilities(g,p,plan,road_selection,region,g.boundary(region)))
     result=_transform(g,_join(g,pieces,'Taiwan farm landscape'),g.vector(0,0,low.outputs['Z']),g.vector(0,0,angle))

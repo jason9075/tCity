@@ -58,7 +58,7 @@ def run():
     # A v0.1-like interface in a separate tree exercises versioned value migration.
     legacy=mod.node_group.copy();legacy.name='TCity • Taiwan Farmland v0.1 upgrade test'
     for item in list(legacy.interface.items_tree):
-        if item.item_type=='SOCKET' and item.name in ('Woodland Mix','Trees','Utility Poles','Pole Spacing','Overhead Wires','Cable Sag'):legacy.interface.remove(item)
+        if item.item_type=='SOCKET' and item.name in ('Woodland Mix','Trees','Utility Poles','Pole Spacing','Overhead Wires','Cable Sag','Village Mix'):legacy.interface.remove(item)
     mod.node_group=legacy
     for name,_,default,*_ in SOCKETS:
         if name in {s.name for s in legacy.interface.items_tree}:set_control(mod,name,default)
@@ -66,6 +66,7 @@ def run():
     assert bpy.ops.tcity.upgrade_farmland()=={'FINISHED'}
     assert mod.node_group.name==GROUP_NAME and get_control(mod,'Seed')==981 and abs(get_control(mod,'Plot Width')-31)<1e-5
     assert get_control(mod,'Utility Poles') and legacy.name in bpy.data.node_groups
+    assert get_control(mod,'Village Mix')==0.
     record('farmland_upgrade','Prior controls and old graph retained; new rural controls initialized')
     (ROOT/'dist/rural_test_results.json').write_text(json.dumps({'blender':bpy.app.version_string,'tests':results},indent=2))
     print('RURAL_PASS',len(results),flush=True)
