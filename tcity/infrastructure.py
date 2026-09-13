@@ -61,9 +61,14 @@ def infrastructure(g,p,origin,px,py,nx,ny,boundary,road_material):
         r=g.node('GeometryNodeRealizeInstances');g.put(n.outputs['Instances'],r.inputs['Geometry']);return r.outputs[0]
     def boolean(a,b,op):
         n=g.node('GeometryNodeMeshBoolean','Street volume '+op.lower(),operation=op,solver='EXACT')
+        # Index, don't subscript by name: Blender 5.2 renames the 2nd input from
+        # 'Mesh 2' to the multi-input 'Mesh' for UNION/INTERSECT, and separately
+        # `n.inputs['Mesh 1']` raises a spurious KeyError for those operations
+        # even though 'Mesh 1' is genuinely that socket's name/identifier.
+        mesh2=n.inputs[1]
         if op=='INTERSECT':
-            g.put(a,n.inputs['Mesh 2']);g.put(b,n.inputs['Mesh 2'])
-        else:g.put(a,n.inputs['Mesh 1']);g.put(b,n.inputs['Mesh 2'])
+            g.put(a,mesh2);g.put(b,mesh2)
+        else:g.put(a,n.inputs[0]);g.put(b,mesh2)
         return n.outputs['Mesh']
     # Correct input winding, then close both caps after Extrude Mesh (which omits its base).
     normal=g.node('GeometryNodeInputNormal');sep=g.node('ShaderNodeSeparateXYZ');g.put(normal.outputs[0],sep.inputs[0])

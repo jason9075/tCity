@@ -57,7 +57,7 @@ class TCITY_PT_modern(bpy.types.Panel):
     bl_label='TCity / 新式住宅社區';bl_idname='TCITY_PT_modern'
     bl_space_type='VIEW_3D';bl_region_type='UI';bl_category='TCity'
     def draw(self,context):
-        layout=self.layout;layout.label(text='MODERN TAIWAN COMMUNITIES',icon='MOD_NODES')
+        layout=self.layout;layout.label(text='MODERN TAIWAN COMMUNITIES',icon='GEOMETRY_NODES')
         layout.operator('tcity.add_modern',text='新增住宅社區範例',icon='ADD')
         layout.operator('tcity.generate_modern',text='從選取區域生成新式社區',icon='MESH_GRID')
         mod=modern_modifier(context.active_object)

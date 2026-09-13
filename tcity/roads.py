@@ -108,6 +108,19 @@ def _mesh_point_count(g,geo):
     return n.outputs['Point Count']
 
 
+def _mesh1(n):return n.inputs[0]
+def _mesh2(n):
+    """Second Mesh Boolean input socket, by position not name: Blender 5.2
+    displays/keys it as 'Mesh 2' for DIFFERENCE but as the multi-input 'Mesh'
+    for UNION/INTERSECT — and on top of that rename, `n.inputs['Mesh 1']`
+    (the FIRST socket, unrelated to this one) raises a spurious KeyError for
+    UNION/INTERSECT despite 'Mesh 1' being both its .name and .identifier
+    (reproduced directly against bpy_prop_collection.__getitem__, likely a
+    Blender bug). Index into n.inputs instead of subscripting by string for
+    both Mesh Boolean inputs to sidestep it."""
+    return n.inputs[1]
+
+
 def _self_union(g,geo,label=''):
     """Mesh Boolean UNION on a single (possibly multi-island, overlapping) input —
     merges overlapping solids in place, e.g. streets meeting at a junction
@@ -124,13 +137,13 @@ def _self_union(g,geo,label=''):
     self-merge step; INTERSECT/DIFFERENCE elsewhere stay on EXACT.
     """
     n=g.node('GeometryNodeMeshBoolean',label or 'Self union',operation='UNION',solver='FLOAT')
-    g.put(geo,n.inputs['Mesh 2'])
+    g.put(geo,_mesh2(n))
     return n.outputs['Mesh']
 
 
 def _boolean_op(g,a,b,op,label=''):
     n=g.node('GeometryNodeMeshBoolean',label or ('Curved street '+op.lower()),operation=op,solver='EXACT')
-    g.put(a,n.inputs['Mesh 1']);g.put(b,n.inputs['Mesh 2'])
+    g.put(a,_mesh1(n));g.put(b,_mesh2(n))
     return n.outputs['Mesh']
 
 
@@ -336,7 +349,7 @@ def build_block_cutter(g,centerline,outer):
     g.put(centerline,swept.inputs['Curve']);g.put(cyclic.outputs['Curve'],swept.inputs['Profile Curve'])
     swept.inputs['Fill Caps'].default_value=True
     union=g.node('GeometryNodeMeshBoolean','Union convex block cutter',operation='UNION',solver='EXACT')
-    g.put(swept.outputs['Mesh'],union.inputs['Mesh 2'])
+    g.put(swept.outputs['Mesh'],_mesh2(union))
     return union.outputs['Mesh']
 
 

@@ -74,7 +74,7 @@ class TCITY_PT_farmland(bpy.types.Panel):
     bl_label='TCity / 台灣農地';bl_idname='TCITY_PT_farmland'
     bl_space_type='VIEW_3D';bl_region_type='UI';bl_category='TCity'
     def draw(self,context):
-        layout=self.layout;layout.label(text='TAIWAN FARMLAND',icon='MOD_NODES')
+        layout=self.layout;layout.label(text='TAIWAN FARMLAND',icon='GEOMETRY_NODES')
         layout.operator('tcity.add_farmland',text='新增農地範例',icon='ADD')
         layout.operator('tcity.generate_farmland',text='從選取區域生成農地',icon='MESH_GRID')
         mod=farmland_modifier(context.active_object)

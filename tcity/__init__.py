@@ -209,7 +209,7 @@ class TCITY_PT_panel(bpy.types.Panel):
     bl_space_type='VIEW_3D';bl_region_type='UI';bl_category='TCity'
     def draw(self,context):
         layout=self.layout
-        layout.label(text='TAIWAN STREETS / 0.7',icon='MOD_NODES')
+        layout.label(text='TAIWAN STREETS / 0.7',icon='GEOMETRY_NODES')
         layout.operator('tcity.add_demo',text='新增範例街區',icon='ADD')
         layout.operator('tcity.generate',text='從選取區域生成',icon='MESH_GRID')
         mod=district_modifier(context.active_object)
