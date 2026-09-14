@@ -31,13 +31,13 @@ def front_wall(b,x0,x1,y,z0,z1,openings,wall,p):
     if cursor<x1:b.box(((cursor+x1)/2,y,(z0+z1)/2),(x1-cursor,.20,z1-z0),wall)
 
 
-def roof(b,x0,x1,y0,y1,eave,ridge,metal,p):
+def roof(b,x0,x1,y0,y1,eave,ridge,metal,p,drain_extension=.25):
     mid=(x0+x1)/2
     for a,c,l,r in [(x0,mid,eave,ridge),(mid,x1,ridge,eave)]:sloped_roof(b,a,c,y0,y1,l,r,metal,p['steel'])
     rod(b,(mid,y0,ridge+.04),(mid,y1,ridge+.04),.075,metal)
     for x in (x0,x1):
         b.box((x, (y0+y1)/2,eave-.04),(.15,y1-y0,.13),p['steel'])
-        cable(b,[(x,y0+.25,eave),(x,y0+.25,.22),(x+.25,y0+.25,.08)],.038,p['pipe'])
+        cable(b,[(x,y0+.25,eave),(x,y0+.25,.22),(x+drain_extension,y0+.25,.08)],.038,p['pipe'])
 
 
 def farmhouse(b,variant):
