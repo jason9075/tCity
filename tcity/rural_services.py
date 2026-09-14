@@ -83,6 +83,83 @@ def _wire_curve_input(name, paths, wire_material, collection):
     return obj
 
 
+def _channel_curve_input(name, runs, concrete_material, water_material, collection):
+    """Create open channel runs whose trough profile is swept by GN."""
+
+    data = bpy.data.curves.new(name, 'CURVE')
+    data.dimensions = '3D'
+    data.resolution_u = 1
+    data.twist_mode = 'Z_UP'
+    for run in runs:
+        spline = data.splines.new('POLY')
+        spline.points.add(len(run) - 1)
+        for point, coordinate in zip(spline.points, run):
+            point.co = (*coordinate, 1.)
+    obj = bpy.data.objects.new(name, data)
+    collection.objects.link(obj)
+
+    group = bpy.data.node_groups.new(name + ' / GN', 'GeometryNodeTree')
+    group.interface.new_socket(name='Geometry', in_out='INPUT', socket_type='NodeSocketGeometry')
+    group.interface.new_socket(name='Geometry', in_out='OUTPUT', socket_type='NodeSocketGeometry')
+    nodes, links = group.nodes, group.links
+    source_input = nodes.new('NodeGroupInput')
+
+    def profile(label, points):
+        node = nodes.new('GeometryNodeCurvePrimitiveQuadrilateral')
+        node.name = label
+        node.label = label
+        node.mode = 'POINTS'
+        for socket, point in zip(('Point 1', 'Point 2', 'Point 3', 'Point 4'), points):
+            node.inputs[socket].default_value = (*point, 0.)
+        return node.outputs['Curve']
+
+    def sweep(label, profile_curve, material_value, fill_caps=True):
+        tube = nodes.new('GeometryNodeCurveToMesh')
+        tube.name = label + ' sweep'
+        tube.label = label + ' sweep'
+        tube.inputs['Fill Caps'].default_value = fill_caps
+        links.new(source_input.outputs['Geometry'], tube.inputs['Curve'])
+        links.new(profile_curve, tube.inputs['Profile Curve'])
+        shade = nodes.new('GeometryNodeSetMaterial')
+        shade.name = label + ' material'
+        shade.label = label + ' material'
+        shade.inputs['Material'].default_value = material_value
+        links.new(tube.outputs['Mesh'], shade.inputs['Geometry'])
+        return shade.outputs['Geometry']
+
+    # Profile coordinates use local X for the channel lateral axis and -Y for
+    # world Z, matching the road cross-section convention in roads.py.
+    base = profile('Channel base profile',
+                   ((-.40, -.04), (.40, -.04), (.40, -.16), (-.40, -.16)))
+    left_wall = profile('Channel left wall profile',
+                        ((-.40, -.10), (-.28, -.10), (-.28, -.50), (-.40, -.50)))
+    right_wall = profile('Channel right wall profile',
+                         ((.28, -.10), (.40, -.10), (.40, -.50), (.28, -.50)))
+    water_profile = nodes.new('GeometryNodeCurvePrimitiveLine')
+    water_profile.name = 'Channel water profile'
+    water_profile.label = 'Channel water profile'
+    water_profile.inputs['Start'].default_value = (-.28, -.28, 0.)
+    water_profile.inputs['End'].default_value = (.28, -.28, 0.)
+    geometries = [
+        sweep('Channel base', base, concrete_material),
+        sweep('Channel left wall', left_wall, concrete_material),
+        sweep('Channel right wall', right_wall, concrete_material),
+        sweep('Channel water', water_profile.outputs['Curve'], water_material, False),
+    ]
+    join = nodes.new('GeometryNodeJoinGeometry')
+    join.name = 'Join open channel parts'
+    join.label = 'Join open channel parts'
+    for geometry in geometries:
+        links.new(geometry, join.inputs['Geometry'])
+    output = nodes.new('NodeGroupOutput')
+    links.new(join.outputs['Geometry'], output.inputs['Geometry'])
+    obj.modifiers.new('Rural channels / Geometry Nodes', 'NODES').node_group = group
+    obj['rural_role'] = 'canals_gn'
+    obj['spline_count'] = len(runs)
+    obj['profile'] = 'open_channel'
+    return obj
+
+
 def _edge_guard(zone, edge_index, start, end):
     """Return the plan-view guard for one station interval on a zone edge."""
 
@@ -340,8 +417,33 @@ def add_services(root, layout, homes, farm, *, cable_sag=.55, max_span=40.):
     from .rural_culverts import connect_road_gaps
     culvert_guards = connect_road_gaps(root, layout, homes, poles, farm)
     connect_channel_corners(root, layout, homes, poles, farm, culvert_guards)
+    zones = {zone.id: zone for zone in layout.zones}
+    channel_paths = []
+    for channel in channels.objects:
+        if channel.get('rural_role') != 'canal':
+            continue
+        zone = zones[channel['zone_id']]
+        a, b = _edges(zone.polygon)[channel['edge_index']]
+        length = distance(a, b)
+        tangent = ((b[0] - a[0]) / length, (b[1] - a[1]) / length)
+        start, end = channel['station_start'], channel['station_end']
+        channel_paths.append([
+            (a[0] + tangent[0] * start, a[1] + tangent[1] * start, 0.),
+            (a[0] + tangent[0] * end, a[1] + tangent[1] * end, 0.),
+        ])
+    channel_host = _channel_curve_input(
+        'Rural irrigation channels / GN paths', channel_paths,
+        farm['concrete'], farm['water'], channels)
+    channel_host['rural_role'] = 'canals_gn'
+    channel_host['spline_count'] = len(channel_paths)
+    for channel in channels.objects:
+        if channel.get('rural_role') == 'canal':
+            channel.hide_render = True
+            channel.hide_set(True)
+    root['canals_gn'] = True
+    root['canal_gn_spline_count'] = len(channel_paths)
     guards = [tuple(zip(list(obj['footprint'])[::2], list(obj['footprint'])[1::2]))
-              for obj in channels.objects]
+              for obj in channels.objects if obj.get('rural_role') == 'canal']
     guards.extend(culvert_guards)
     for obj in list(root.all_objects):
         if obj.get('rural_role') != 'crops':
@@ -354,8 +456,9 @@ def add_services(root, layout, homes, farm, *, cable_sag=.55, max_span=40.):
         obj.data.update()
         obj['crop_count'] = len(points)
     root['wire_spans'] = span_count
-    root['canal_runs'] = len(channels.objects)
-    root['canal_length'] = sum(o['length'] for o in channels.objects)
+    canal_objects = [o for o in channels.objects if o.get('rural_role') == 'canal']
+    root['canal_runs'] = len(canal_objects)
+    root['canal_length'] = sum(o['length'] for o in canal_objects)
     root['crop_count'] = sum(o['crop_count'] for o in root.all_objects if o.get('rural_role') == 'crops')
     root['cable_sag'] = cable_sag
     root['max_wire_span'] = max_span

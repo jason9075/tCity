@@ -100,6 +100,20 @@ wires = [o for o in objects if o.get('rural_role') == 'wire']
 canals = [o for o in objects if o.get('rural_role') == 'canal']
 assert len(wires) == root['wire_spans'] * 4 and len(wires) > 20
 assert len(canals) == root['canal_runs'] and len(canals) > 10
+canal_gn = [o for o in objects if o.get('rural_role') == 'canals_gn']
+assert len(canal_gn) == 1
+assert canal_gn[0].modifiers and canal_gn[0].modifiers[0].node_group.name.endswith(' / GN')
+assert canal_gn[0]['spline_count'] == len(canals)
+canal_gn_spline_count = canal_gn[0]['spline_count']
+canal_gn_evaluated = canal_gn[0].evaluated_get(dg)
+canal_gn_mesh = canal_gn_evaluated.to_mesh()
+assert len(canal_gn_mesh.vertices) > len(canals) * 20
+assert len(canal_gn_mesh.polygons) > len(canals) * 10
+assert abs(min(v.co.z for v in canal_gn_mesh.vertices) - .04) < .001
+assert abs(max(v.co.z for v in canal_gn_mesh.vertices) - .5) < .001
+assert any('water' in material.name.lower() for material in canal_gn_mesh.materials)
+canal_gn_evaluated.to_mesh_clear()
+print('PASS Geometry Nodes open channel layer', canal_gn_spline_count, flush=True)
 for obj in wires:
     first, second = (bpy.data.objects[obj[key]] for key in ('pole_start', 'pole_end'))
     across, height = ANCHORS[obj['anchor_index']]
@@ -225,6 +239,7 @@ assert sum(o.get('rural_role') == 'housing_gn' for o in root.all_objects) == 1
 assert sum(o.get('rural_role') == 'rural_asset_source' for o in root.all_objects) == len(buildings)
 assert sum(o.get('rural_role') == 'poles_gn' for o in root.all_objects) == 1
 assert sum(o.get('rural_role') == 'wires_gn' for o in root.all_objects) == 1
+assert sum(o.get('rural_role') == 'canals_gn' for o in root.all_objects) == 1
 housing_host = next(o for o in root.all_objects if o.get('rural_role') == 'housing_gn')
 reloaded_housing = sum(
     int(item.parent is not None and item.parent.name == housing_host.name)
@@ -237,10 +252,13 @@ reloaded_poles = sum(
     for item in bpy.context.evaluated_depsgraph_get().object_instances
 )
 assert reloaded_poles == len(poles)
+canal_host = next(o for o in root.all_objects if o.get('rural_role') == 'canals_gn')
+assert canal_host['spline_count'] == canal_gn_spline_count
 report = {'result': 'PASS', 'blender': bpy.app.version_string, 'homes': len(homes),
           'building_volumes': len(buildings), 'crops': crop_count, 'poles': len(poles),
           'housing_gn_instances': housing_instance_count,
           'pole_gn_instances': pole_instances, 'wire_gn_splines': wire_gn_spline_count,
+          'canal_gn_splines': canal_gn_spline_count,
           'wire_spans': root['wire_spans'], 'canal_runs': len(canals), 'canal_length': root['canal_length'],
           'canal_corner_connections': root['canal_corner_connections'],
           'culverts': len(culverts), 'culvert_length': root['culvert_length'],

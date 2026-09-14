@@ -46,4 +46,4 @@ if culverts:
     bpy.ops.render.render(write_still=True)
 scene.camera = bpy.data.objects['Rural aerial']
 bpy.ops.wm.save_as_mainfile(filepath=str(ROOT / 'dist/TCity_Rural_Settlement.blend'), compress=True)
-print('RURAL_SERVICES', {key: root[key] for key in ('housing_instance_count', 'wire_spans', 'canal_runs', 'canal_length', 'crop_count', 'culvert_count', 'culvert_length')}, flush=True)
+print('RURAL_SERVICES', {key: root[key] for key in ('housing_instance_count', 'wire_spans', 'canal_runs', 'canal_gn_spline_count', 'canal_length', 'crop_count', 'culvert_count', 'culvert_length')}, flush=True)
